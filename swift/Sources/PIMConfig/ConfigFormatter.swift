@@ -21,7 +21,7 @@ public struct ConfigFormatter {
         lines.append("")
 
         // Calendars
-        lines.append(domainFilterLine("Calendars", config.calendars))
+        lines.append(domainFilterLine("Calendars", config.calendars, calendarWrites: true))
         // Reminders
         lines.append(domainFilterLine("Reminders", config.reminders))
         // Contacts
@@ -100,7 +100,7 @@ public struct ConfigFormatter {
 
     // MARK: - Private helpers
 
-    private static func domainFilterLine(_ name: String, _ cfg: DomainFilterConfig) -> String {
+    private static func domainFilterLine(_ name: String, _ cfg: DomainFilterConfig, calendarWrites: Bool = true) -> String {
         let label = "\(name):".padding(toLength: 16, withPad: " ", startingAt: 0)
         if !cfg.enabled {
             return "\(label)disabled"
@@ -109,12 +109,22 @@ public struct ConfigFormatter {
         if cfg.mode != .all && !cfg.items.isEmpty {
             parts += "   items: \(cfg.items.joined(separator: ", "))"
         }
+        if !cfg.accounts.isEmpty {
+            parts += "   accounts: \(cfg.accounts.joined(separator: ", "))"
+        }
+        if calendarWrites {
+            parts += "   writes: \(cfg.allowWrites ? "enabled" : "disabled")"
+        }
+        parts += "   deletes: \(cfg.allowDeletes ? "enabled" : "disabled")"
+        if !cfg.hasExplicitScope {
+            parts += "   access: denied (exact item/account allowlists required)"
+        }
         return "\(label)\(parts)"
     }
 
     private static func domainLine(_ name: String, _ cfg: DomainConfig) -> String {
         let label = "\(name):".padding(toLength: 16, withPad: " ", startingAt: 0)
-        return "\(label)\(cfg.enabled ? "enabled" : "disabled")"
+        return "\(label)\(cfg.enabled ? "enabled" : "disabled")   deletes: \(cfg.allowDeletes ? "enabled" : "disabled")"
     }
 
     private static func tildeContract(_ path: String) -> String {

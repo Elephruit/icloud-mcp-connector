@@ -1,164 +1,99 @@
 import Testing
 @testable import PIMConfig
 
-@Suite("ItemFilter")
+@Suite("ItemFilter exact scopes")
 struct ItemFilterTests {
-
-    // MARK: - Mode: all
-
-    @Test("All mode allows everything")
-    func testAllModeAllowsEverything() {
-        let config = DomainFilterConfig(mode: .all, items: ["Work"])
-        #expect(ItemFilter.isAllowed(name: "Personal", config: config))
-        #expect(ItemFilter.isAllowed(name: "Work", config: config))
-        #expect(ItemFilter.isAllowed(name: "Random", config: config))
+    private var scope: DomainFilterConfig {
+        DomainFilterConfig(enabled: true, items: ["calendar-A"], accounts: ["account-A"])
     }
 
-    // MARK: - Mode: allowlist
-
-    @Test("Allowlist matches exact name (case-insensitive)")
-    func testAllowlistExactName() {
-        let config = DomainFilterConfig(mode: .allowlist, items: ["Personal", "Family"])
-        #expect(ItemFilter.isAllowed(name: "Personal", config: config))
-        #expect(ItemFilter.isAllowed(name: "personal", config: config))
-        #expect(ItemFilter.isAllowed(name: "FAMILY", config: config))
-        #expect(!ItemFilter.isAllowed(name: "Work", config: config))
+    @Test("An exact stable resource and account pair is allowed")
+    func exactIdentifiers() {
+        #expect(scope.hasExplicitScope)
+        #expect(ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-A", config: scope))
+        #expect(ItemFilter.isAllowed(name: "Renamed display label", id: "calendar-A", accountID: "account-A", config: scope))
     }
 
-    @Test("Allowlist matches by ID")
-    func testAllowlistMatchesById() {
-        let config = DomainFilterConfig(mode: .allowlist, items: ["ABC-123"])
-        #expect(ItemFilter.isAllowed(name: "Some Calendar", id: "ABC-123", config: config))
-        #expect(ItemFilter.isAllowed(name: "Some Calendar", id: "abc-123", config: config))
-        #expect(!ItemFilter.isAllowed(name: "Other", id: "XYZ-999", config: config))
+    @Test("Display names, emoji, and case folding cannot authorize")
+    func displayNamesAreNotAuthority() {
+        #expect(!ItemFilter.isAllowed(name: "calendar-A", id: "other", accountID: "account-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "✈️ calendar-A", id: "other", accountID: "account-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "CALENDAR-A", accountID: "account-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "ACCOUNT-A", config: scope))
     }
 
-    @Test("Allowlist matches emoji-stripped name")
-    func testAllowlistEmojiStripped() {
-        let config = DomainFilterConfig(mode: .allowlist, items: ["Travel", "Budget & Finances"])
-        #expect(ItemFilter.isAllowed(name: "✈️ Travel", config: config))
-        #expect(ItemFilter.isAllowed(name: "🏦 Budget & Finances", config: config))
+    @Test("Resource scope never crosses an account boundary")
+    func accountBoundary() {
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-B", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-B", accountID: "account-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", accountID: "account-A", config: scope))
+        #expect(!ItemFilter.isAllowed(name: "Family", config: scope))
     }
 
-    @Test("Allowlist with emoji items matches plain names")
-    func testAllowlistEmojiItemsMatchPlain() {
-        let config = DomainFilterConfig(mode: .allowlist, items: ["✈️ Travel"])
-        #expect(ItemFilter.isAllowed(name: "Travel", config: config))
-        #expect(ItemFilter.isAllowed(name: "travel", config: config))
+    @Test("Defaults and disabled domains deny even with exact identifiers")
+    func disabledDomains() {
+        #expect(!DomainFilterConfig().hasExplicitScope)
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-A", config: DomainFilterConfig()))
+        var disabled = scope
+        disabled.enabled = false
+        #expect(!disabled.hasExplicitScope)
+        #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-A", config: disabled))
     }
 
-    @Test("Empty allowlist blocks everything")
-    func testEmptyAllowlistBlocksAll() {
-        let config = DomainFilterConfig(mode: .allowlist, items: [])
-        #expect(!ItemFilter.isAllowed(name: "Personal", config: config))
-        #expect(!ItemFilter.isAllowed(name: "Work", config: config))
+    @Test("Legacy all and blocklist modes deny access")
+    func broadModesFailClosed() {
+        for mode in [FilterMode.all, .blocklist] {
+            let config = DomainFilterConfig(enabled: true, mode: mode, items: ["calendar-A"], accounts: ["account-A"])
+            #expect(!config.hasExplicitScope)
+            #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-A", config: config))
+        }
     }
 
-    // MARK: - Mode: blocklist
-
-    @Test("Blocklist excludes matched items")
-    func testBlocklistExcludesMatched() {
-        let config = DomainFilterConfig(mode: .blocklist, items: ["Holidays", "Birthdays"])
-        #expect(!ItemFilter.isAllowed(name: "Holidays", config: config))
-        #expect(!ItemFilter.isAllowed(name: "Birthdays", config: config))
-        #expect(ItemFilter.isAllowed(name: "Personal", config: config))
+    @Test("Incomplete and empty-identifier scopes deny access")
+    func incompleteScopesFailClosed() {
+        let configurations = [
+            DomainFilterConfig(enabled: true, items: [], accounts: ["account-A"]),
+            DomainFilterConfig(enabled: true, items: ["calendar-A"], accounts: []),
+            DomainFilterConfig(enabled: true, items: ["calendar-A", ""], accounts: ["account-A"]),
+            DomainFilterConfig(enabled: true, items: ["calendar-A"], accounts: ["account-A", " \n"]),
+        ]
+        for config in configurations {
+            #expect(!config.hasExplicitScope)
+            #expect(!ItemFilter.isAllowed(name: "Family", id: "calendar-A", accountID: "account-A", config: config))
+        }
     }
 
-    @Test("Blocklist allows non-matched items")
-    func testBlocklistAllowsUnmatched() {
-        let config = DomainFilterConfig(mode: .blocklist, items: ["Spam"])
-        #expect(ItemFilter.isAllowed(name: "Work", config: config))
-        #expect(ItemFilter.isAllowed(name: "Personal", config: config))
-    }
-
-    @Test("Empty blocklist allows everything")
-    func testEmptyBlocklistAllowsAll() {
-        let config = DomainFilterConfig(mode: .blocklist, items: [])
-        #expect(ItemFilter.isAllowed(name: "Personal", config: config))
-        #expect(ItemFilter.isAllowed(name: "Work", config: config))
-    }
-
-    // MARK: - Emoji stripping
-
-    @Test("Strip single emoji prefix")
-    func testStripSingleEmoji() {
-        #expect(ItemFilter.stripEmojiPrefix("✈️ Travel") == "travel")
-    }
-
-    @Test("Strip compound emoji prefix")
-    func testStripCompoundEmoji() {
-        #expect(ItemFilter.stripEmojiPrefix("🏦 Budget & Finances") == "budget & finances")
-    }
-
-    @Test("No emoji returns lowercased string")
-    func testNoEmojiReturnsLowercased() {
-        #expect(ItemFilter.stripEmojiPrefix("Personal") == "personal")
-    }
-
-    @Test("Multiple emoji characters stripped")
-    func testMultipleEmojiStripped() {
-        #expect(ItemFilter.stripEmojiPrefix("🎉🎊 Party") == "party")
-    }
-
-    @Test("Empty string returns empty")
-    func testEmptyString() {
-        #expect(ItemFilter.stripEmojiPrefix("") == "")
-    }
-
-    @Test("Only emoji returns empty")
-    func testOnlyEmoji() {
-        #expect(ItemFilter.stripEmojiPrefix("🏠") == "")
-    }
-
-    @Test("Variation selector stripped correctly")
-    func testVariationSelector() {
-        // U+2708 (airplane) + U+FE0F (variation selector)
-        #expect(ItemFilter.stripEmojiPrefix("✈️ Travel") == "travel")
-    }
-
-    // MARK: - Filter array
-
-    @Test("Filter array with allowlist")
-    func testFilterArray() {
-        let config = DomainFilterConfig(mode: .allowlist, items: ["A", "C"])
-        let items = ["A", "B", "C", "D"]
-        let result = ItemFilter.filter(items: items, config: config, name: { $0 })
-        #expect(result == ["A", "C"])
-    }
-
-    @Test("Filter array in all mode returns everything")
-    func testFilterArrayAllMode() {
-        let config = DomainFilterConfig(mode: .all)
-        let items = ["A", "B", "C"]
-        let result = ItemFilter.filter(items: items, config: config, name: { $0 })
-        #expect(result == ["A", "B", "C"])
-    }
-
-    @Test("Filter with ID extraction")
-    func testFilterWithId() {
+    @Test("Array filtering uses exact identifiers and account scope")
+    func filterArray() {
         struct Item {
             let name: String
             let id: String
+            let account: String
         }
-        let config = DomainFilterConfig(mode: .allowlist, items: ["id-2"])
-        let items = [Item(name: "First", id: "id-1"), Item(name: "Second", id: "id-2")]
-        let result = ItemFilter.filter(
-            items: items,
-            config: config,
-            name: { $0.name },
-            id: { $0.id }
+        let items = [
+            Item(name: "Family", id: "calendar-A", account: "account-A"),
+            Item(name: "Family", id: "calendar-B", account: "account-A"),
+            Item(name: "Family", id: "calendar-A", account: "account-B"),
+        ]
+        let filtered = ItemFilter.filter(
+            items: items, config: scope, name: { $0.name }, id: { $0.id }, accountID: { $0.account }
         )
-        #expect(result.count == 1)
-        #expect(result[0].name == "Second")
+        #expect(filtered.count == 1)
+        #expect(filtered.first?.id == "calendar-A")
+        #expect(filtered.first?.account == "account-A")
+        #expect(ItemFilter.filter(items: items, config: scope, name: { $0.name }, id: { $0.id }).isEmpty)
+        #expect(ItemFilter.filter(items: items, config: scope, name: { $0.name }).isEmpty)
+        #expect(ItemFilter.filter(items: items, config: DomainFilterConfig(enabled: true, mode: .all), name: { $0.name }).isEmpty)
     }
 
-    // MARK: - Disabled domain
-
-    @Test("Disabled domain config")
-    func testDisabledDomain() {
-        let config = DomainFilterConfig(enabled: false, mode: .all)
-        // isAllowed doesn't check enabled — that's the caller's responsibility
-        // This test documents that isAllowed only checks mode/items
-        #expect(ItemFilter.isAllowed(name: "Test", config: config))
+    @Test("Deletes require a separate explicit flag")
+    func deletionDefaults() {
+        #expect(!scope.allowDeletes)
+        var optedIn = scope
+        optedIn.allowDeletes = true
+        #expect(optedIn.hasExplicitScope)
+        #expect(optedIn.allowDeletes)
+        #expect(!DomainConfig().allowDeletes)
     }
 }

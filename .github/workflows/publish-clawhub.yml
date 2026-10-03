@@ -16,6 +16,7 @@ jobs:
   # openclaw/. That leaves the tap pointing at a version npm and ClawHub never got,
   # which is worse than nothing publishing at all.
   preflight:
+    if: github.repository == 'omarshahine/apple-pim'
     name: SDK contract preflight
     runs-on: ubuntu-latest
     steps:
@@ -54,6 +55,7 @@ jobs:
         run: echo "::notice::$DETAIL"
 
   publish:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Publish to ClawHub
     runs-on: ubuntu-latest
     needs: preflight

@@ -47,6 +47,7 @@ jobs:
   # the same tag, so without this a premature tag can leave some registries
   # updated and others not.
   preflight:
+    if: github.repository == 'omarshahine/apple-pim'
     name: SDK contract preflight
     runs-on: ubuntu-latest
     steps:
@@ -71,6 +72,7 @@ jobs:
           exit 1
 
   sign:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Sign and notarize
     runs-on: macos-latest
     needs: preflight

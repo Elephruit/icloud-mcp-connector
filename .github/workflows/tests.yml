@@ -17,6 +17,7 @@ jobs:
   # ("MCP Server (Node)", "Swift CLI") — a workflow-level paths filter would
   # leave them stuck as Expected.
   changes:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
@@ -45,6 +46,7 @@ jobs:
   # bash 3.2) is covered by the post-sign assertions in
   # release-signed-artifacts.yml, which necessarily run on macOS anyway.
   signing-tests:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Signing Checks (Shell)
     runs-on: ubuntu-latest
     steps:
@@ -63,7 +65,7 @@ jobs:
   mcp-server-tests:
     name: MCP Server (Node)
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.node == 'true'
+    if: github.repository == 'omarshahine/apple-pim' && github.event_name == 'pull_request' && needs.changes.outputs.node == 'true'
     runs-on: macos-latest
     defaults:
       run:
@@ -92,6 +94,7 @@ jobs:
         run: npm run build
 
   agent-evals:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Agent Evals
     runs-on: ubuntu-latest
     steps:
@@ -117,7 +120,7 @@ jobs:
   swift-cli-tests:
     name: Swift CLI
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.swift == 'true'
+    if: github.repository == 'omarshahine/apple-pim' && github.event_name == 'pull_request' && needs.changes.outputs.swift == 'true'
     runs-on: macos-latest
     defaults:
       run:
@@ -151,6 +154,7 @@ jobs:
   # reads as proof and ran nothing. The condition that made skipping right is gone, so
   # the behaviour changes with it.
   openclaw-plugin-tests:
+    if: github.repository == 'omarshahine/apple-pim'
     name: OpenClaw Plugin
     runs-on: ubuntu-latest
     steps:
@@ -214,6 +218,7 @@ jobs:
           echo "### OpenClaw plugin tests: RAN against openclaw@$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   version-check:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Version Consistency
     runs-on: ubuntu-latest
     steps:

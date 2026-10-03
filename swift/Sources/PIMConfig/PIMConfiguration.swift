@@ -37,6 +37,20 @@ public struct PIMConfiguration: Codable, Equatable, Sendable {
         case defaultCalendar = "default_calendar"
         case defaultReminderList = "default_reminder_list"
     }
+
+    /// Omitted domains always decode to disabled, empty scopes. Legacy files
+    /// cannot accidentally retain the old all-access defaults.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        calendars = try values.decodeIfPresent(DomainFilterConfig.self, forKey: .calendars) ?? DomainFilterConfig()
+        reminders = try values.decodeIfPresent(DomainFilterConfig.self, forKey: .reminders) ?? DomainFilterConfig()
+        contacts = try values.decodeIfPresent(DomainFilterConfig.self, forKey: .contacts) ?? DomainFilterConfig()
+        mail = try values.decodeIfPresent(DomainConfig.self, forKey: .mail) ?? DomainConfig()
+        defaultCalendar = try values.decodeIfPresent(String.self, forKey: .defaultCalendar)
+        defaultReminderList = try values.decodeIfPresent(String.self, forKey: .defaultReminderList)
+        smtp = try values.decodeIfPresent(SMTPDefaults.self, forKey: .smtp)
+        imap = try values.decodeIfPresent(IMAPDefaults.self, forKey: .imap)
+    }
 }
 
 /// Non-secret SMTP connection defaults.
@@ -109,25 +123,82 @@ public struct IMAPDefaults: Codable, Equatable, Sendable {
     }
 }
 
-/// Configuration for a domain that supports item-level filtering (calendars, reminders, contacts).
+/// Explicit resource and account scope for calendars, reminders, and contacts.
+/// `items` and `accounts` contain exact stable identifiers, never display names.
 public struct DomainFilterConfig: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var mode: FilterMode
     public var items: [String]
+    public var accounts: [String]
+    /// Every native domain mutation requires this host-owned opt-in plus scope.
+    public var allowWrites: Bool
+    public var allowDeletes: Bool
 
-    public init(enabled: Bool = true, mode: FilterMode = .all, items: [String] = []) {
+    public init(
+        enabled: Bool = false,
+        mode: FilterMode = .allowlist,
+        items: [String] = [],
+        accounts: [String] = [],
+        allowWrites: Bool = false,
+        allowDeletes: Bool = false
+    ) {
         self.enabled = enabled
         self.mode = mode
         self.items = items
+        self.accounts = accounts
+        self.allowWrites = allowWrites
+        self.allowDeletes = allowDeletes
+    }
+
+    /// Check before requesting macOS permissions or accessing domain data.
+    /// Broad legacy modes and incomplete scopes deliberately fail closed.
+    public var hasExplicitScope: Bool {
+        enabled && mode == .allowlist &&
+        !items.isEmpty && !accounts.isEmpty &&
+        items.allSatisfy(Self.isNonemptyIdentifier) &&
+        accounts.allSatisfy(Self.isNonemptyIdentifier)
+    }
+
+    private static func isNonemptyIdentifier(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, mode, items, accounts
+        case allowWrites = "allow_writes"
+        case allowDeletes = "allow_deletes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        mode = try values.decodeIfPresent(FilterMode.self, forKey: .mode) ?? .allowlist
+        items = try values.decodeIfPresent([String].self, forKey: .items) ?? []
+        accounts = try values.decodeIfPresent([String].self, forKey: .accounts) ?? []
+        allowWrites = try values.decodeIfPresent(Bool.self, forKey: .allowWrites) ?? false
+        allowDeletes = try values.decodeIfPresent(Bool.self, forKey: .allowDeletes) ?? false
     }
 }
 
-/// Configuration for a domain with only an enabled flag (mail).
+/// Mail remains disabled by default and outside the scoped connector prototype.
 public struct DomainConfig: Codable, Equatable, Sendable {
     public var enabled: Bool
+    public var allowDeletes: Bool
 
-    public init(enabled: Bool = true) {
+    public init(enabled: Bool = false, allowDeletes: Bool = false) {
         self.enabled = enabled
+        self.allowDeletes = allowDeletes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case allowDeletes = "allow_deletes"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        allowDeletes = try values.decodeIfPresent(Bool.self, forKey: .allowDeletes) ?? false
     }
 }
 

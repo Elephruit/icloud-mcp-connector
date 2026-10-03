@@ -57,8 +57,8 @@ struct ConfigFormatterTests {
         #expect(output.contains("Active profile: work"))
     }
 
-    @Test("Config show all domains enabled")
-    func testConfigShowAllDomainsEnabled() {
+    @Test("Config show default domains disabled")
+    func testConfigShowDefaultDomainsDisabled() {
         let config = PIMConfiguration()
         let output = ConfigFormatter.formatConfigShow(
             config: config,
@@ -70,10 +70,10 @@ struct ConfigFormatterTests {
         #expect(output.contains("Reminders:"))
         #expect(output.contains("Contacts:"))
         #expect(output.contains("Mail:"))
-        // All should show enabled
+        // Defaults must report disabled before any scope is provided.
         let lines = output.components(separatedBy: "\n")
         let calLine = lines.first { $0.hasPrefix("Calendars:") }
-        #expect(calLine?.contains("enabled") ?? false)
+        #expect(calLine?.contains("disabled") ?? false)
     }
 
     @Test("Config show disabled domain")
@@ -95,7 +95,7 @@ struct ConfigFormatterTests {
     @Test("Config show allowlist with items")
     func testConfigShowAllowlistWithItems() {
         let config = PIMConfiguration(
-            calendars: DomainFilterConfig(enabled: true, mode: .allowlist, items: ["Personal", "Family"])
+            calendars: DomainFilterConfig(enabled: true, mode: .allowlist, items: ["calendar-A", "calendar-B"], accounts: ["account-A"])
         )
         let output = ConfigFormatter.formatConfigShow(
             config: config,
@@ -104,7 +104,27 @@ struct ConfigFormatterTests {
             activeProfile: nil
         )
         #expect(output.contains("mode: allowlist"))
-        #expect(output.contains("items: Personal, Family"))
+        #expect(output.contains("items: calendar-A, calendar-B"))
+        #expect(output.contains("accounts: account-A"))
+        #expect(output.contains("writes: disabled"))
+        #expect(output.contains("deletes: disabled"))
+        #expect(!output.contains("access: denied"))
+    }
+
+    @Test("Config show reports Calendar write opt-in separately from deletion")
+    func testConfigShowCalendarWrites() {
+        let config = PIMConfiguration(
+            calendars: DomainFilterConfig(enabled: true, items: ["calendar-A"], accounts: ["account-A"], allowWrites: true)
+        )
+        let output = ConfigFormatter.formatConfigShow(
+            config: config,
+            configPath: "/tmp/config.json",
+            profilesDir: "/tmp/profiles",
+            activeProfile: nil
+        )
+        let calendarLine = output.components(separatedBy: "\n").first { $0.hasPrefix("Calendars:") }
+        #expect(calendarLine?.contains("writes: enabled") == true)
+        #expect(calendarLine?.contains("deletes: disabled") == true)
     }
 
     @Test("Config show defaults")

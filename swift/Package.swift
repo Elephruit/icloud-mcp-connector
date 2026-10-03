@@ -12,11 +12,13 @@ let package = Package(
         .executable(name: "reminder-cli", targets: ["ReminderCLI"]),
         .executable(name: "contacts-cli", targets: ["ContactsCLI"]),
         .executable(name: "mail-cli", targets: ["MailCLI"]),
+        .executable(name: "notes-access-cli", targets: ["NotesAccessCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
+        .executableTarget(name: "NotesAccessCLI", path: "Sources/NotesAccessCLI"),
         .target(
             name: "PIMConfig",
             dependencies: [

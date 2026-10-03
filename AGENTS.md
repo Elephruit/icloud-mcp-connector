@@ -1,13 +1,24 @@
-# Apple PIM Plugin
+# iCloud MCP Connector fork
 
-macOS PIM (Personal Information Management) tools for Calendar, Reminders, Contacts, and Mail.app. Works with Claude Code (via MCP) and OpenClaw (via native tool registration). Both adapters share a common `lib/` layer that delegates to native Swift CLIs using EventKit, Contacts framework, and JXA.
+> This fork's scoped prototype is defined by [README.md](README.md), these
+> corrected scope rules, [Notes](docs/notes-adapter.md), and
+> [transport](docs/assistant-transport.md). Preserve upstream MIT copyright and
+> attribution. Use synthetic fixtures and a feature branch; keep personal
+> data, real IDs, private configuration, secrets, and conversations outside Git.
+> Live access requires an approved exact scope and existing macOS grants.
+> The fork request does not authorize code push, PR/issues, publishing,
+> credential creation, persistent agents, ports, or privacy/security changes.
+> Any later authorized PR starts in draft mode. Inherited Mail/OpenClaw,
+> publishing, and imported-memory material below is historical context outside
+> the validated safe interface; it must not broaden these rules.
+
+The current prototype provides scoped Calendar, Reminders, Contacts, and Notes through local stdio MCP. Native Swift CLIs use EventKit/Contacts; the original Notes adapter uses fixed AppleScript plus argv. Mail is excluded from scoped MCP; the inherited standalone Mail CLI and OpenClaw adapter are outside the validated interface. The upstream README is preserved at `docs/upstream-readme.md`.
 
 ## Quick Commands
 
-```bash
-# Initial setup
-./setup.sh
+Review execution first. Do not run `setup.sh` as a test: it installs binaries and can install a helper app. Tests must use synthetic fixtures and must not access personal stores or request permissions.
 
+```bash
 # Swift CLIs
 cd swift
 swift build -c release
@@ -15,41 +26,38 @@ swift test
 
 # MCP server
 cd mcp-server
-npm install
+npm install --ignore-scripts --no-audit --no-fund
 npm test
 npm run build
 
-# Agent evals (from repo root)
-npm run eval
+# Synthetic fork tests (from repo root)
+node --test test/*.test.mjs
 ```
 
 ## Architecture
 
-Handler logic, schemas, and sanitization live in `lib/` (shared). The MCP server and OpenClaw plugin are thin adapters. All access control, filtering, and default resolution is handled by the Swift CLIs via the shared `PIMConfig` library:
+Shared handlers, schemas, argument mapping, and sanitization live in `lib/`.
+The scoped MCP validates host-owned configuration in
+`lib/scoped-dispatcher.js` / `lib/connector-policy.js` **before** CLI or Notes
+dispatch. Calendar/Reminders/Contacts CLIs independently enforce scope through
+`PIMConfig`. Notes validates exact account/folder IDs before fixed AppleScript.
 
-```
-Claude Code  <--MCP-->  mcp-server/server.js  ---+
-                                                  +--> lib/ (handlers, schemas, sanitize)
-OpenClaw  <--tools-->  openclaw/src/index.ts  ---+           |
-                                                        Swift CLIs (EventKit / Contacts / JXA)
-                                                             |
-                                                        PIMConfig (~/.config/apple-pim/)
-```
-
-Each Swift CLI is a standalone binary that reads from macOS frameworks, validates access via PIMConfig, and writes JSON to stdout.
+MCP uses this checkout's release binaries only, with no `~/.local/bin` fallback
+or automatic upstream helper-app launch. Stdio tests do not establish a cloud
+dot connection; test the actual caller and execution host separately.
 
 ## Repo Layout
 
 | Path | Purpose |
 |------|---------|
 | `lib/` | Shared handler logic, schemas, sanitize (used by both MCP and OpenClaw) |
-| `lib/handlers/` | Domain handlers: calendar, reminder, contact, mail, apple-pim |
+| `lib/handlers/` | Scoped calendar, reminder, contact, notes, and runtime handlers; Mail retained outside scoped MCP |
 | `swift/Sources/PIMConfig` | Shared config library (filtering, profiles, validation) |
 | `swift/Sources/CalendarCLI` | EventKit calendar CLI |
 | `swift/Sources/ReminderCLI` | EventKit reminders CLI |
 | `swift/Sources/ContactsCLI` | Contacts framework CLI |
 | `swift/Sources/MailCLI` | Mail.app JXA-based CLI |
-| `mcp-server/server.js` | MCP adapter (imports lib/, thin pass-through) |
+| `mcp-server/server.js` | Local stdio adapter; scoped policy gates dispatch |
 | `mcp-server/dist/server.js` | Bundled server artifact (rebuild after source changes) |
 | `openclaw/` | OpenClaw plugin package (NPM: apple-pim-cli) |
 | `openclaw/src/index.ts` | OpenClaw tool registration with per-call isolation |
@@ -62,15 +70,65 @@ Each Swift CLI is a standalone binary that reads from macOS frameworks, validate
 
 ## Configuration (PIMConfig)
 
-- Config lives at `~/.config/apple-pim/config.json` (base) with optional profiles at `~/.config/apple-pim/profiles/{name}.json`.
-- All four CLIs share the `PIMConfig` library for allowlist/blocklist filtering, domain enable/disable, and defaults.
-- Profile selection: `--profile` flag > `APPLE_PIM_PROFILE` env var > base config only.
-- **Fail-closed profiles:** If a profile is explicitly requested (via `--profile` or `APPLE_PIM_PROFILE`) but the file doesn't exist, the CLI exits with an error instead of falling back to the base config.
-- Profile overrides replace entire domain sections (not field-by-field merge).
-- The MCP server does NOT do any config filtering — it passes `--profile` to CLIs when set.
-- **OpenClaw plugin** (`openclaw/`): Registers tools that spawn CLIs directly (no MCP). Supports per-call `configDir`/`profile` parameters for multi-agent workspace isolation. See [`docs/multi-agent-setup.md`](docs/multi-agent-setup.md).
-- **Direct CLI usage:** `APPLE_PIM_CONFIG_DIR` overrides the config root directory; `APPLE_PIM_PROFILE` selects a profile.
-- **Date format:** `APPLE_PIM_DATE_FORMAT` selects calendar date output format. Presets: `utc` (default, `2026-03-20T14:00:00Z`), `local` (`2026-03-20T07:00:00-07:00`), `day-utc` (`Friday, 2026-03-20T14:00:00Z`), `day-local` (`Friday, 2026-03-20T07:00:00-07:00`). CalendarCLI only.
+MCP requires `APPLE_PIM_CONFIG_DIR` to be an explicit absolute private directory
+outside Git containing `config.json`. Direct Swift CLIs retain the inherited
+`~/.config/apple-pim/` default, with disabled scopes. MCP rejects per-call
+`configDir` / `profile`; only the host environment selects configuration.
+
+Calendar, Reminders, and Contacts default to disabled, empty scopes. Each enabled
+domain requires `mode: "allowlist"`, nonempty exact `items`, and nonempty exact
+`accounts` IDs. Missing/malformed config, missing/invalid requested profiles,
+incomplete scopes, `all`, and `blocklist` cannot grant access. Never recover
+using a broader base/profile or system defaults.
+
+| Domain | `items` | `accounts` |
+| --- | --- | --- |
+| Calendar | `EKCalendar.calendarIdentifier` | `EKSource.sourceIdentifier` |
+| Reminders | list `EKCalendar.calendarIdentifier` | `EKSource.sourceIdentifier` |
+| Contacts | `CNContainer.identifier` | `CNContainer.identifier` |
+
+Names do not authorize resources. Name selectors resolve only inside allowed
+IDs; duplicates are errors. Creation requires an explicit allowed target or an
+allowed configured default ID (`default_calendar` / `default_reminder_list`).
+There is no EventKit system-default fallback. Contacts creation requires an
+explicit allowed container; reads avoid cross-account unification.
+
+Deletion defaults to denied. Calendar/Reminders/Contacts use snake_case
+`allow_deletes`; only host-owned `true` permits delete actions. All native domain
+mutations also require host-owned `allow_writes: true`, default false, before
+authorization or lookup. Retain client
+call approval because domain tools combine both.
+
+Direct CLI profiles use `--profile` > `APPLE_PIM_PROFILE` > base only. Profiles
+replace whole domain sections. Base/profile failures fail closed; no broad
+fallback is permitted. Notes does not support profiles.
+
+Normal native commands check existing grants without prompting. Permission
+requests are explicit CLI `authorize` only, within an approved flow, and are
+unavailable through MCP. Scoped MCP `apple-pim` exposes runtime `status` and
+`schema` only; it does not query private stores/config, verify TCC/iCloud, or
+establish cloud connection. MCP has no `authorize`, `config_show`, or
+`config_init`. Direct CLI `config init` reports already scoped resources only,
+with no unscoped discovery and no file write.
+
+### Notes
+
+Original `lib/notes*.js` supports `search`, `get`, `create`, and `append`;
+there is no deletion or account/folder discovery. Exact nonempty `accounts`
+and `folders` ID allowlists plus `enabled: true` are required. Writes additionally
+require camelCase `allowWrites: true` and explicit allowed `accountId` /
+`folderId`. Profiles and per-call configuration overrides are unsupported.
+
+The checkout's `notes-access-cli status` preflight requires Notes already
+running and existing Automation authorization, with prompting disabled. A
+missing helper or denied grant blocks AppleScript; do not install a helper or
+request permissions implicitly. Synthetic tests do not establish live grants.
+
+Notes data is argv to fixed AppleScript, not interpolated code. Search/get
+return bounded metadata/plaintext. Append rejects locked, attachment-bearing,
+or unsupported rich notes. Concurrent edits and sync remain unverified; verify
+a timed-out write before retrying. `dryRun` validates policy/arguments without
+AppleScript and cannot prove live scope, permission, or support.
 
 ## Testing Notes
 
@@ -78,7 +136,7 @@ Each Swift CLI is a standalone binary that reads from macOS frameworks, validate
 - PIMConfig tests (`swift/Tests/PIMConfigTests/`) cover filtering logic, config round-trips, profile merging, and security validation.
 - Prefer unit tests for logic seams (`swift/Tests/*`, `mcp-server/test/*`) over tests that require macOS permissions.
 - Full EventKit/Contacts/Mail integration paths can require local TCC permissions and Mail.app running.
-- **Agent evals** (`evals/`) test the tool layer from the agent's perspective: argument correctness, response interpretation, multi-turn workflows, and safety properties. All evals run against mock CLI fixtures (zero TCC, no real data). Run with `npm run eval` from repo root.
+- **Agent evals** (`evals/`) test the tool layer from the agent's perspective: argument correctness, response interpretation, multi-turn workflows, and safety properties. All evals run against mock CLI fixtures (zero TCC, no real data). Review the selected suite before running it; inherited model-in-the-loop evals are paid external-model calls outside routine synthetic validation.
 - To add new eval cases, edit the YAML files in `evals/scenarios/` and add fixture JSON in `evals/fixtures/` as needed. No test code changes required for new cases in existing categories.
 - **Calendar reasoning evals** (`tests/calendar-reasoning.test.js`) are model-in-the-loop: they call `claude -p` with fixtures and grade responses with an LLM judge. They require `ANTHROPIC_API_KEY` in the environment. A full run of 8 scenarios costs ~$2.31 and takes ~8 minutes. These are non-deterministic and may flake on edge-case reasoning.
 
@@ -93,7 +151,7 @@ Each Swift CLI is a standalone binary that reads from macOS frameworks, validate
     than skipping green, when its capability probe finds no published SDK shipping the
     channel-ingress contract: a required check that ran nothing is the failure mode #122 was
     filed about. Do not relax it to unblock a PR; fix the floor in `openclaw/package.json`.
-- Auto-merge is enabled at the repo level; use it on PRs so merges wait for required checks.
+- Inherited CI/release expectations below are historical. Do not push, open a PR, auto-merge, tag, or publish without authorization; later authorized PRs start in draft mode.
 - This repo ignores lockfiles; CI uses `npm install` (not `npm ci`) in `mcp-server`.
 - Agent evals run on `ubuntu-latest` (no macOS needed since they use mock fixtures).
 - The two macOS jobs (`MCP Server (Node)`, `Swift CLI`) run only on pull requests and only when their source paths changed (`dorny/paths-filter` gating in `tests.yml`); job-level skips still satisfy the required checks. macOS minutes bill at 10x Linux, so pushes to main run only the Linux jobs.
@@ -130,9 +188,11 @@ scripts/bump-version.sh 3.7.2
 scripts/check-versions.sh
 ```
 
-After bumping: commit, tag `v<new>`, push. CI enforces agreement on every PR — a drifted manifest will fail the `Version Consistency` job.
+If a release is later authorized, maintain agreement across these manifests and its release tag. Bumping, committing, tagging, pushing, and publishing are not part of this local prototype.
 
-## Publishing (OpenClaw Plugin)
+## Publishing (OpenClaw Plugin — inherited historical workflow)
+
+This section records upstream operations. It is outside the validated scoped interface and does not authorize running the publishing/install commands.
 
 The OpenClaw plugin is published as `apple-pim-cli` on both ClawHub and NPM.
 
@@ -223,7 +283,9 @@ If this repo needs hand-authored feature coverage, keep those curated definition
 
 
 <!-- BEGIN CLAUDE MEMORY IMPORT: -Users-omarshahine-GitHub-apple-pim -->
-## Imported Claude Project Memory
+## Imported Claude Project Memory (historical upstream context)
+
+The corrected scoped-prototype rules above take precedence over these inherited memories. Mail/OpenClaw, helper installation/routing, and publishing instructions here are outside the validated interface; they are not permission to execute a fallback.
 
 Durable memory promoted from `~/.claude/projects/-Users-omarshahine-GitHub-apple-pim/memory` during the AGENTS.md migration. Keep this section current when project-specific operating knowledge changes.
 
@@ -235,7 +297,7 @@ Durable memory promoted from `~/.claude/projects/-Users-omarshahine-GitHub-apple
 - Swift CLIs (`calendar-cli`, `reminder-cli`, `contacts-cli`, `mail-cli`) live in `swift/Sources/`
 - Shared handler logic, schemas, sanitize in `lib/` — used by both MCP server and OpenClaw plugin
 - Handlers receive `runCLI` via dependency injection (second parameter)
-- MCP adapter in `mcp-server/server.js` imports from `lib/`, thin pass-through
+- Current scoped MCP imports `lib/` and gates host-owned configuration before dispatch; upstream adapters described here remain historical.
 - OpenClaw plugin in `openclaw/src/index.ts` — registers 5 `apple_pim_*` tools with per-call env isolation
 - `openclaw/lib` is a symlink to `../lib`; `prepack`/`postpack` scripts handle npm publishing
 - Root `package.json` has shared deps (`mailparser`, `turndown`) for `lib/` resolution

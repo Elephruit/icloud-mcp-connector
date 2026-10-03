@@ -12,9 +12,12 @@ struct SecretsStoreTests {
         let root: URL
         let configDir: URL
         let openclawPath: URL
+        let previousEnvironment: [String: String]
+        private static let environmentKeys = ["APPLE_PIM_CONFIG_DIR", "OPENCLAW_SECRETS_PATH", "SMTP_ICLOUD_PASSWORD", "NOPE_NOPE"]
 
         init() {
             ProcessEnvironmentTestLock.lock.lock()
+            self.previousEnvironment = ProcessInfo.processInfo.environment.filter { Self.environmentKeys.contains($0.key) }
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("apple-pim-secrets-test-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -23,6 +26,10 @@ struct SecretsStoreTests {
             self.openclawPath = tmp.appendingPathComponent("openclaw/secrets.json")
             setenv("APPLE_PIM_CONFIG_DIR", configDir.path, 1)
             setenv("OPENCLAW_SECRETS_PATH", openclawPath.path, 1)
+            // Fixture assertions must never read or print credentials inherited
+            // from the developer's real environment.
+            unsetenv("SMTP_ICLOUD_PASSWORD")
+            unsetenv("NOPE_NOPE")
             try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
             try? FileManager.default.createDirectory(
                 at: openclawPath.deletingLastPathComponent(),
@@ -31,8 +38,10 @@ struct SecretsStoreTests {
         }
 
         func tearDown() {
-            unsetenv("APPLE_PIM_CONFIG_DIR")
-            unsetenv("OPENCLAW_SECRETS_PATH")
+            for key in Self.environmentKeys {
+                if let previous = previousEnvironment[key] { setenv(key, previous, 1) }
+                else { unsetenv(key) }
+            }
             try? FileManager.default.removeItem(at: root)
             ProcessEnvironmentTestLock.lock.unlock()
         }

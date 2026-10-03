@@ -1,0 +1,32 @@
+{
+  "calendars": {
+    "enabled": false,
+    "mode": "allowlist",
+    "items": [],
+    "accounts": [],
+    "allow_writes": false,
+    "allow_deletes": false
+  },
+  "reminders": {
+    "enabled": false,
+    "mode": "allowlist",
+    "items": [],
+    "accounts": [],
+    "allow_writes": false,
+    "allow_deletes": false
+  },
+  "contacts": {
+    "enabled": false,
+    "mode": "allowlist",
+    "items": [],
+    "accounts": [],
+    "allow_writes": false,
+    "allow_deletes": false
+  },
+  "notes": {
+    "enabled": false,
+    "accounts": [],
+    "folders": [],
+    "allowWrites": false
+  }
+}

@@ -35,6 +35,7 @@ jobs:
   # succeed and leave the tap pointing at a version those registries never got,
   # which is worse than nothing publishing at all.
   preflight:
+    if: github.repository == 'omarshahine/apple-pim'
     name: SDK contract preflight
     runs-on: ubuntu-latest
     steps:
@@ -73,6 +74,7 @@ jobs:
         run: echo "::notice::$DETAIL"
 
   bump:
+    if: github.repository == 'omarshahine/apple-pim'
     name: Bump apple-pim-cli formula
     runs-on: ubuntu-latest
     needs: preflight

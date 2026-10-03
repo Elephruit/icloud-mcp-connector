@@ -4,6 +4,8 @@ import Foundation
 public enum ConfigError: Error, CustomStringConvertible {
     case invalidProfileName(String, reason: String)
     case malformedConfig(path: String, underlying: Error)
+    case profileNotFound(name: String, path: String)
+    case baseConfigNotFound(path: String)
 
     public var description: String {
         switch self {
@@ -11,6 +13,10 @@ public enum ConfigError: Error, CustomStringConvertible {
             return "Invalid profile name '\(name)': \(reason)"
         case .malformedConfig(let path, let underlying):
             return "Malformed config at \(path): \(underlying.localizedDescription)"
+        case .profileNotFound(let name, let path):
+            return "Profile '\(name)' not found at \(path)"
+        case .baseConfigNotFound(let path):
+            return "Base config not found at \(path); a profile cannot grant access without a valid base config"
         }
     }
 }
@@ -52,41 +58,53 @@ public struct ConfigLoader {
     /// - Parameter profile: Optional profile name. If nil, checks `APPLE_PIM_PROFILE` env var.
     /// - Returns: The merged configuration (base + profile override).
     public static func load(profile: String? = nil) -> PIMConfiguration {
-        let base = loadBaseConfig()
-
-        let profileName = profile ?? ProcessInfo.processInfo.environment["APPLE_PIM_PROFILE"]
-        guard let profileName, !profileName.isEmpty else {
-            return base
-        }
-
         do {
-            try validateProfileName(profileName)
+            return try loadValidated(profile: profile)
         } catch {
             FileHandle.standardError.write(
                 Data("[apple-pim] Error: \(error). Refusing to fall back to base config.\n".utf8)
             )
             Foundation.exit(1)
         }
+    }
 
-        let override = loadProfile(named: profileName)
-        if override == nil {
-            // Fail closed: explicit profile not found is an error, not a warning
-            FileHandle.standardError.write(
-                Data("[apple-pim] Error: profile '\(profileName)' not found at \(profilePath(for: profileName).path). Refusing to fall back to base config.\n".utf8)
-            )
-            Foundation.exit(1)
+    /// Throwing seam for validating explicit profiles without terminating a
+    /// caller. The CLI entry point above exits on every profile failure.
+    public static func loadValidated(profile: String? = nil) throws -> PIMConfiguration {
+        let base: PIMConfiguration? = try readJSON(from: defaultConfigPath)
+        let profileName = profile ?? ProcessInfo.processInfo.environment["APPLE_PIM_PROFILE"]
+        guard let profileName else { return base ?? PIMConfiguration() }
+
+        try validateProfileName(profileName)
+        let path = profilePath(for: profileName)
+        guard let override: PIMProfileOverride = try readJSON(from: path) else {
+            throw ConfigError.profileNotFound(name: profileName, path: path.path)
         }
+        guard let base else { throw ConfigError.baseConfigNotFound(path: defaultConfigPath.path) }
         return merge(base: base, profile: override)
     }
 
-    /// Load just the base config (no profile). Returns all-access defaults if file is missing or invalid.
+    /// Missing or malformed base configuration returns disabled, empty scopes.
     public static func loadBaseConfig() -> PIMConfiguration {
-        return loadJSON(from: defaultConfigPath) ?? PIMConfiguration()
+        do {
+            return try readJSON(from: defaultConfigPath) ?? PIMConfiguration()
+        } catch {
+            FileHandle.standardError.write(
+                Data("[apple-pim] Warning: \(error). Denying access with disabled defaults.\n".utf8)
+            )
+            return PIMConfiguration()
+        }
     }
 
     /// Load a named profile override. Returns nil if file is missing or invalid.
     public static func loadProfile(named name: String) -> PIMProfileOverride? {
-        return loadJSON(from: profilePath(for: name))
+        do {
+            try validateProfileName(name)
+            return try readJSON(from: profilePath(for: name))
+        } catch {
+            FileHandle.standardError.write(Data("[apple-pim] Warning: \(error). Profile was not loaded.\n".utf8))
+            return nil
+        }
     }
 
     /// Validate that a profile name is safe for use as a filename.
@@ -101,6 +119,10 @@ public struct ConfigLoader {
         // Reject hidden files and other problematic names
         guard !name.hasPrefix(".") else {
             throw ConfigError.invalidProfileName(name, reason: "name cannot start with '.'")
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        guard name.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            throw ConfigError.invalidProfileName(name, reason: "name must contain only ASCII letters, digits, '_' or '-'")
         }
     }
 
@@ -129,17 +151,14 @@ public struct ConfigLoader {
 
     // MARK: - Private
 
-    private static func loadJSON<T: Decodable>(from url: URL) -> T? {
+    private static func readJSON<T: Decodable>(from url: URL) throws -> T? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
 
         do {
             let data = try Data(contentsOf: url)
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            FileHandle.standardError.write(
-                Data("[apple-pim] Warning: failed to parse \(url.path): \(error.localizedDescription). Using defaults.\n".utf8)
-            )
-            return nil
+            throw ConfigError.malformedConfig(path: url.path, underlying: error)
         }
     }
 }

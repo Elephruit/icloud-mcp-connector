@@ -10,6 +10,7 @@ struct CalendarCLI: AsyncParsableCommand {
         abstract: "Manage macOS Calendar events using EventKit",
         subcommands: [
             AuthStatus.self,
+            Authorize.self,
             ListCalendars.self,
             ListEvents.self,
             GetEvent.self,
@@ -60,6 +61,35 @@ struct AuthStatus: ParsableCommand {
 // MARK: - Shared Utilities
 
 let eventStore = EKEventStore()
+
+/// Check existing permission only. Ordinary commands must never display a TCC prompt.
+func requireCalendarAuthorization() throws {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    if #available(macOS 14.0, *) {
+        guard status == .fullAccess else {
+            throw CLIError.accessDenied("Calendar full access is required. Run authorize only after approving this Mac's calendar scope.")
+        }
+    } else {
+        guard status == .authorized else {
+            throw CLIError.accessDenied("Calendar access is required. Run authorize only after approving this Mac's calendar scope.")
+        }
+    }
+}
+
+struct Authorize: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "authorize",
+        abstract: "Explicitly request macOS Calendar access for a configured scope"
+    )
+    @OptionGroup var pimOptions: PIMOptions
+
+    func run() async throws {
+        let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars)
+        try await requestCalendarAccess()
+        outputJSON(["success": true, "authorization": "authorized"])
+    }
+}
 
 func requestCalendarAccess() async throws {
     if #available(macOS 14.0, *) {
@@ -219,6 +249,16 @@ func parseDate(_ string: String) -> Date? {
     return nil
 }
 
+/// An explicit event timezone is metadata for its already parsed absolute dates.
+/// Callers should include an offset in date/time strings to avoid host-timezone ambiguity.
+func validatedEventTimeZone(_ identifier: String?) throws -> TimeZone? {
+    guard let identifier = identifier else { return nil }
+    guard !identifier.isEmpty, let timeZone = TimeZone(identifier: identifier) else {
+        throw CLIError.invalidInput("Invalid event timezone identifier")
+    }
+    return timeZone
+}
+
 func calendarToDict(_ calendar: EKCalendar) -> [String: Any] {
     return [
         "id": calendar.calendarIdentifier,
@@ -226,7 +266,8 @@ func calendarToDict(_ calendar: EKCalendar) -> [String: Any] {
         "type": calendarTypeString(calendar.type),
         "color": calendar.cgColor?.components?.map { Int($0 * 255) } ?? [],
         "allowsModifications": calendar.allowsContentModifications,
-        "source": calendar.source?.title ?? "Unknown"
+        "source": calendar.source?.title ?? "Unknown",
+        "sourceId": calendar.source?.sourceIdentifier ?? ""
     ]
 }
 
@@ -270,6 +311,9 @@ func eventToDict(_ event: EKEvent) -> [String: Any] {
     }
     if let url = event.url {
         dict["url"] = url.absoluteString
+    }
+    if let timeZone = event.timeZone {
+        dict["timezone"] = timeZone.identifier
     }
     if event.hasRecurrenceRules, let rules = event.recurrenceRules {
         dict["recurrence"] = rules.map { ruleToDict($0) }
@@ -357,6 +401,10 @@ func participantRoleString(_ role: EKParticipantRole) -> String {
 
 // MARK: - Write Verification
 
+func calendarMatchesRequestedSelector(_ requested: String, storedID: String, storedTitle: String) -> Bool {
+    storedID == requested || storedTitle.lowercased() == requested.lowercased()
+}
+
 /// Build a verification dict comparing requested inputs against stored event values.
 /// Gives calling agents an immediate signal if date parsing produced wrong times.
 func buildVerification(event: EKEvent, requestedStart: String, requestedEnd: String?, requestedCalendar: String?) -> [String: Any] {
@@ -381,8 +429,9 @@ func buildVerification(event: EKEvent, requestedStart: String, requestedEnd: Str
 
     let calendarMatch: Bool
     if let reqCal = requestedCalendar {
-        let storedCal = event.calendar?.title ?? ""
-        calendarMatch = storedCal.lowercased() == reqCal.lowercased()
+        calendarMatch = calendarMatchesRequestedSelector(
+            reqCal, storedID: event.calendar?.calendarIdentifier ?? "", storedTitle: event.calendar?.title ?? ""
+        )
     } else {
         calendarMatch = true
     }
@@ -403,6 +452,7 @@ func buildVerification(event: EKEvent, requestedStart: String, requestedEnd: Str
     if let reqCal = requestedCalendar {
         dict["requestedCalendar"] = reqCal
         dict["storedCalendar"] = event.calendar?.title ?? ""
+        dict["storedCalendarId"] = event.calendar?.calendarIdentifier ?? ""
         dict["calendarMatch"] = calendarMatch
     }
 
@@ -512,47 +562,137 @@ private func setAttendeesOnEvent(_ event: EKEvent, attendees attendeeInputs: [At
 
 // MARK: - Config Helpers
 
-/// Get only the calendars allowed by the current PIM config.
-func allowedCalendars(config: PIMConfiguration) -> [EKCalendar] {
+/// Validate the scope before any authorization or EventKit data access.
+func requireCalendarScope(_ config: DomainFilterConfig, deletion: Bool = false, writing: Bool = false) throws {
+    guard config.hasExplicitScope else {
+        throw CLIError.accessDenied("Calendar access requires enabled allowlist configuration with exact item and account IDs.")
+    }
+    guard !deletion || config.allowDeletes else {
+        throw CLIError.accessDenied("Calendar deletion is disabled. Set allow_deletes explicitly for the approved scope to enable it.")
+    }
+    guard !writing || config.allowWrites else {
+        throw CLIError.accessDenied("Calendar writes are disabled. Set allow_writes explicitly for the approved scope to enable them.")
+    }
+}
+
+/// Pure selection seam: a name can identify one scoped item only; IDs win exactly.
+func selectAllowedCalendar<T>(
+    nameOrId: String,
+    exactIDOnly: Bool = false,
+    items: [T],
+    config: DomainFilterConfig,
+    name: (T) -> String,
+    id: (T) -> String,
+    accountID: (T) -> String
+) throws -> T {
+    try requireCalendarScope(config)
+    let allowed = items.filter {
+        ItemFilter.isAllowed(name: name($0), id: id($0), accountID: accountID($0), config: config)
+    }
+    if let exact = allowed.first(where: { id($0) == nameOrId }) { return exact }
+    guard !exactIDOnly else {
+        throw CLIError.notFound("The configured default ID is unavailable within the allowed scope.")
+    }
+    let matches = allowed.filter { name($0).caseInsensitiveCompare(nameOrId) == .orderedSame }
+    guard !matches.isEmpty else {
+        throw CLIError.notFound("No allowed calendar matches the requested name or ID.")
+    }
+    guard matches.count == 1 else {
+        throw CLIError.invalidInput("Calendar name is ambiguous within the allowed scope. Use an exact item ID.")
+    }
+    return matches[0]
+}
+
+/// Get only explicitly allowed items from explicitly allowed EventKit sources.
+func allowedCalendars(config: PIMConfiguration) throws -> [EKCalendar] {
+    try requireCalendarScope(config.calendars)
     let all = eventStore.calendars(for: .event)
-    return ItemFilter.filter(items: all, config: config.calendars, name: { $0.title }, id: { $0.calendarIdentifier })
+    let allowed = ItemFilter.filter(
+        items: all, config: config.calendars, name: { $0.title },
+        id: { $0.calendarIdentifier }, accountID: { $0.source?.sourceIdentifier ?? "" }
+    )
+    guard !allowed.isEmpty else {
+        throw CLIError.accessDenied("No configured calendar is available in an allowed account.")
+    }
+    return allowed
 }
 
-/// Validate that an event's calendar is accessible under the current config.
-/// Throws CLIError.accessDenied if blocked.
+/// Missing item/source identities are denied rather than treated as accessible.
 func validateEventAccess(_ event: EKEvent, config: PIMConfiguration) throws {
-    guard let cal = event.calendar else { return }
-    guard ItemFilter.isAllowed(name: cal.title, id: cal.calendarIdentifier, config: config.calendars) else {
-        throw CLIError.accessDenied("Calendar '\(cal.title)' is not in your allowed list. Run /apple-pim:configure to update access.")
+    guard let cal = event.calendar,
+          ItemFilter.isAllowed(
+            name: cal.title, id: cal.calendarIdentifier,
+            accountID: cal.source?.sourceIdentifier, config: config.calendars
+          ) else {
+        throw CLIError.accessDenied("The requested item is outside the configured calendar and account scope.")
     }
 }
 
-/// Find a calendar by name or ID, validating it's in the allowed list.
-func findAllowedCalendar(nameOrId: String, config: PIMConfiguration) throws -> EKCalendar {
-    let allCalendars = eventStore.calendars(for: .event)
-    guard let cal = allCalendars.first(where: {
-        $0.calendarIdentifier == nameOrId || $0.title.lowercased() == nameOrId.lowercased()
-    }) else {
-        throw CLIError.notFound("Calendar not found: \(nameOrId)")
-    }
-    guard ItemFilter.isAllowed(name: cal.title, id: cal.calendarIdentifier, config: config.calendars) else {
-        throw CLIError.accessDenied("Calendar '\(cal.title)' is not in your allowed list. Run /apple-pim:configure to update access.")
-    }
-    return cal
+func findAllowedCalendar(nameOrId: String, exactIDOnly: Bool = false, config: PIMConfiguration) throws -> EKCalendar {
+    try requireCalendarScope(config.calendars)
+    return try selectAllowedCalendar(
+        nameOrId: nameOrId, exactIDOnly: exactIDOnly, items: eventStore.calendars(for: .event), config: config.calendars,
+        name: { $0.title }, id: { $0.calendarIdentifier }, accountID: { $0.source?.sourceIdentifier ?? "" }
+    )
 }
 
-/// Resolve the target calendar for a create operation: explicit name > config default > system default.
+/// A configured default must be a stable allowed ID. Never use the system default.
+func targetCalendarSelector(explicit: String?, defaultID: String?, config: DomainFilterConfig) throws -> String {
+    try requireCalendarScope(config)
+    if let explicit = explicit, !explicit.isEmpty { return explicit }
+    guard let defaultID = defaultID, config.items.contains(defaultID) else {
+        throw CLIError.invalidInput("Specify an allowed calendar or configure its exact ID as the default.")
+    }
+    return defaultID
+}
+
 func resolveTargetCalendar(explicit: String?, config: PIMConfiguration) throws -> EKCalendar {
-    if let name = explicit {
-        return try findAllowedCalendar(nameOrId: name, config: config)
+    let selector = try targetCalendarSelector(explicit: explicit, defaultID: config.defaultCalendar, config: config.calendars)
+    return try findAllowedCalendar(nameOrId: selector, exactIDOnly: explicit == nil || explicit?.isEmpty == true, config: config)
+}
+
+/// Exact ID selection operates on records already returned by a scoped predicate.
+func selectScopedEvent<T>(id: String, items: [T], identifier: (T) -> String) throws -> T {
+    let matches = items.filter { identifier($0) == id }
+    guard !matches.isEmpty else {
+        throw CLIError.notFound("No accessible event matches the ID within the lookup date window. Specify --from and --to if needed.")
     }
-    if let defaultName = config.defaultCalendar {
-        return try findAllowedCalendar(nameOrId: defaultName, config: config)
+    guard matches.count == 1 else {
+        throw CLIError.invalidInput("Event ID matches multiple occurrences. Narrow --from and --to to one occurrence.")
     }
-    guard let systemDefault = eventStore.defaultCalendarForNewEvents else {
-        throw CLIError.notFound("No default calendar available")
+    return matches[0]
+}
+
+/// EventKit date predicates must be bounded. Defaults cover 366 days either side.
+func eventLookupWindow(from: String?, to: String?, now: Date = Date()) throws -> (start: Date, end: Date) {
+    let calendar = Calendar.current
+    let start: Date
+    let end: Date
+    if let from = from {
+        guard let parsed = parseDate(from) else { throw CLIError.invalidInput("Invalid lookup start date") }
+        start = parsed
+    } else {
+        start = calendar.date(byAdding: .day, value: -366, to: now)!
     }
-    return systemDefault
+    if let to = to {
+        guard let parsed = parseDate(to) else { throw CLIError.invalidInput("Invalid lookup end date") }
+        end = adjustToEndOfDay(parsed, originalString: to)
+    } else {
+        end = calendar.date(byAdding: .day, value: 366, to: now)!
+    }
+    guard end > start, let maximumEnd = calendar.date(byAdding: .year, value: 4, to: start), end <= maximumEnd else {
+        throw CLIError.invalidInput("Lookup date window must be increasing and span no more than four years.")
+    }
+    return (start, end)
+}
+
+func findAllowedEvent(id: String, config: PIMConfiguration, from: String? = nil, to: String? = nil) throws -> EKEvent {
+    let calendars = try allowedCalendars(config: config)
+    let window = try eventLookupWindow(from: from, to: to)
+    let predicate = eventStore.predicateForEvents(withStart: window.start, end: window.end, calendars: calendars)
+    let scoped = eventStore.events(matching: predicate)
+        .filter { (try? validateEventAccess($0, config: config)) != nil }
+    return try selectScopedEvent(id: id, items: scoped, identifier: { $0.eventIdentifier ?? "" })
 }
 
 // MARK: - Recurrence Helpers
@@ -666,10 +806,10 @@ struct ListCalendars: AsyncParsableCommand {
     @OptionGroup var pimOptions: PIMOptions
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
-        let calendars = allowedCalendars(config: config)
+        try requireCalendarScope(config.calendars)
+        try requireCalendarAuthorization()
+        let calendars = try allowedCalendars(config: config)
         let result = calendars.map { calendarToDict($0) }
 
         outputJSON([
@@ -700,9 +840,9 @@ struct ListEvents: AsyncParsableCommand {
     var limit: Int = 100
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars)
+        try requireCalendarAuthorization()
 
         guard let startDate = parseDate(from) else {
             throw CLIError.invalidInput("Invalid start date: \(from)")
@@ -719,17 +859,18 @@ struct ListEvents: AsyncParsableCommand {
         }
 
         // Resolve calendars: explicit filter > all allowed calendars
-        var calendars: [EKCalendar]?
+        var calendars: [EKCalendar]
         if let calendarFilter = calendar {
             let cal = try findAllowedCalendar(nameOrId: calendarFilter, config: config)
             calendars = [cal]
-        } else if config.calendars.mode != .all {
+        } else {
             // Restrict to allowed calendars only
-            calendars = allowedCalendars(config: config)
+            calendars = try allowedCalendars(config: config)
         }
 
         let predicate = eventStore.predicateForEvents(withStart: startDate, end: endDate, calendars: calendars)
         let events = eventStore.events(matching: predicate)
+            .filter { (try? validateEventAccess($0, config: config)) != nil }
             .prefix(limit)
             .map { eventToDict($0) }
 
@@ -753,19 +894,21 @@ struct GetEvent: AsyncParsableCommand {
 
     @OptionGroup var pimOptions: PIMOptions
 
+    @Option(name: .long, help: "Start of scoped ID lookup window (default: 366 days ago)")
+    var from: String?
+
+    @Option(name: .long, help: "End of scoped ID lookup window (default: 366 days ahead; maximum span four years)")
+    var to: String?
+
     @Option(name: .long, help: "Event ID")
     var id: String
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars)
+        try requireCalendarAuthorization()
 
-        guard let event = eventStore.event(withIdentifier: id) else {
-            throw CLIError.notFound("Event not found: \(id)")
-        }
-
-        try validateEventAccess(event, config: config)
+        let event = try findAllowedEvent(id: id, config: config, from: from, to: to)
 
         outputJSON([
             "success": true,
@@ -798,9 +941,9 @@ struct SearchEvents: AsyncParsableCommand {
     var limit: Int = 50
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars)
+        try requireCalendarAuthorization()
 
         let startDate = from.flatMap { parseDate($0) } ?? Calendar.current.date(byAdding: .day, value: -30, to: Date())!
         let endDate: Date
@@ -811,16 +954,17 @@ struct SearchEvents: AsyncParsableCommand {
         }
 
         // Resolve calendars: explicit filter > all allowed calendars
-        var calendars: [EKCalendar]?
+        var calendars: [EKCalendar]
         if let calendarFilter = calendar {
             let cal = try findAllowedCalendar(nameOrId: calendarFilter, config: config)
             calendars = [cal]
-        } else if config.calendars.mode != .all {
-            calendars = allowedCalendars(config: config)
+        } else {
+            calendars = try allowedCalendars(config: config)
         }
 
         let predicate = eventStore.predicateForEvents(withStart: startDate, end: endDate, calendars: calendars)
         let events = eventStore.events(matching: predicate)
+            .filter { (try? validateEventAccess($0, config: config)) != nil }
             .filter { event in
                 let title = event.title?.lowercased() ?? ""
                 let notes = event.notes?.lowercased() ?? ""
@@ -860,6 +1004,9 @@ struct CreateEvent: AsyncParsableCommand {
     @Option(name: .long, help: "Duration in minutes (alternative to --end)")
     var duration: Int?
 
+    @Option(name: .long, help: "Event timezone identifier (e.g. America/Chicago); include UTC offsets in --start/--end")
+    var timezone: String?
+
     @Option(name: .long, help: "Calendar name or ID (default: default calendar)")
     var calendar: String?
 
@@ -885,9 +1032,10 @@ struct CreateEvent: AsyncParsableCommand {
     var attendees: String?
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars, writing: true)
+        let eventTimeZone = try validatedEventTimeZone(timezone)
+        try requireCalendarAuthorization()
 
         guard let startDate = parseDate(start) else {
             throw CLIError.invalidInput("Invalid start date: \(start)")
@@ -911,6 +1059,9 @@ struct CreateEvent: AsyncParsableCommand {
         event.endDate = endDate
         event.isAllDay = allDay
         event.calendar = try resolveTargetCalendar(explicit: calendar, config: config)
+        if let eventTimeZone = eventTimeZone {
+            event.timeZone = eventTimeZone
+        }
 
         if let loc = location {
             event.location = loc
@@ -922,10 +1073,8 @@ struct CreateEvent: AsyncParsableCommand {
             event.url = eventUrl
         }
 
-        for minutes in alarm {
-            let alarm = EKAlarm(relativeOffset: TimeInterval(-minutes * 60))
-            event.addAlarm(alarm)
-        }
+        // An empty explicit array suppresses calendar/system default alerts.
+        event.alarms = alarm.map { EKAlarm(relativeOffset: TimeInterval(-$0 * 60)) }
 
         // Add recurrence rule if specified
         if let recurrenceJSON = recurrence, let rule = parseRecurrenceRule(recurrenceJSON) {
@@ -961,6 +1110,12 @@ struct UpdateEvent: AsyncParsableCommand {
 
     @OptionGroup var pimOptions: PIMOptions
 
+    @Option(name: .long, help: "Start of scoped ID lookup window (default: 366 days ago)")
+    var from: String?
+
+    @Option(name: .long, help: "End of scoped ID lookup window (default: 366 days ahead; maximum span four years)")
+    var to: String?
+
     @Option(name: .long, help: "Event ID to update")
     var id: String
 
@@ -992,15 +1147,11 @@ struct UpdateEvent: AsyncParsableCommand {
     var futureEvents: Bool = false
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars, writing: true)
+        try requireCalendarAuthorization()
 
-        guard let event = eventStore.event(withIdentifier: id) else {
-            throw CLIError.notFound("Event not found: \(id)")
-        }
-
-        try validateEventAccess(event, config: config)
+        let event = try findAllowedEvent(id: id, config: config, from: from, to: to)
 
         if let newTitle = title {
             event.title = newTitle
@@ -1078,6 +1229,12 @@ struct DeleteEvent: AsyncParsableCommand {
 
     @OptionGroup var pimOptions: PIMOptions
 
+    @Option(name: .long, help: "Start of scoped ID lookup window (default: 366 days ago)")
+    var from: String?
+
+    @Option(name: .long, help: "End of scoped ID lookup window (default: 366 days ahead; maximum span four years)")
+    var to: String?
+
     @Option(name: .long, help: "Event ID to delete")
     var id: String
 
@@ -1085,15 +1242,11 @@ struct DeleteEvent: AsyncParsableCommand {
     var futureEvents: Bool = false
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars, deletion: true, writing: true)
+        try requireCalendarAuthorization()
 
-        guard let event = eventStore.event(withIdentifier: id) else {
-            throw CLIError.notFound("Event not found: \(id)")
-        }
-
-        try validateEventAccess(event, config: config)
+        let event = try findAllowedEvent(id: id, config: config, from: from, to: to)
 
         let eventInfo = eventToDict(event)
         let span: EKSpan = futureEvents ? .futureEvents : .thisEvent
@@ -1169,9 +1322,9 @@ struct BatchCreateEvent: AsyncParsableCommand {
     var json: String
 
     func run() async throws {
-        try await requestCalendarAccess()
-
         let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars, writing: true)
+        try requireCalendarAuthorization()
         let events = try decodeBatchEvents(json)
 
         var createdEvents: [[String: Any]] = []
@@ -1298,27 +1451,23 @@ struct ConfigShow: ParsableCommand {
 struct ConfigInit: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "init",
-        abstract: "List available calendars and reminder lists for configuration setup"
+        abstract: "Show only calendars already allowed by explicit configuration"
     )
 
     @OptionGroup var pimOptions: PIMOptions
 
     func run() async throws {
-        try await requestCalendarAccess()
+        let config = pimOptions.loadConfig()
+        try requireCalendarScope(config.calendars)
+        try requireCalendarAuthorization()
         let ctx = pimOptions.outputContext
 
-        let calendars = eventStore.calendars(for: .event).map { calendarToDict($0) }
-
-        // Also request reminder access to list those
-        if #available(macOS 14.0, *) {
-            let _ = try? await eventStore.requestFullAccessToReminders()
-        } else {
-            let _ = try? await eventStore.requestAccess(to: .reminder)
-        }
-        let lists = eventStore.calendars(for: .reminder).map { listToDict($0) }
-
-        let defaultCal = eventStore.defaultCalendarForNewEvents?.title ?? ""
-        let defaultRem = eventStore.defaultCalendarForNewReminders()?.title ?? ""
+        let allowed = try allowedCalendars(config: config)
+        let calendars = allowed.map { calendarToDict($0) }
+        let defaultCal = allowed.first { $0.calendarIdentifier == config.defaultCalendar }?.calendarIdentifier ?? ""
+        // Each domain has separate scope and authorization. This command reads calendars only.
+        let lists: [[String: Any]] = []
+        let defaultRem = ""
 
         pimOutput(
             [
@@ -1349,6 +1498,7 @@ func listToDict(_ calendar: EKCalendar) -> [String: Any] {
         "title": calendar.title,
         "color": calendar.cgColor?.components?.map { Int($0 * 255) } ?? [],
         "allowsModifications": calendar.allowsContentModifications,
-        "source": calendar.source?.title ?? "Unknown"
+        "source": calendar.source?.title ?? "Unknown",
+        "sourceId": calendar.source?.sourceIdentifier ?? ""
     ]
 }

@@ -1,0 +1,12 @@
+{
+  "name": "icloud-mcp-connector-local",
+  "interface": { "displayName": "iCloud MCP Connector Local" },
+  "plugins": [
+    {
+      "name": "icloud-mcp-connector",
+      "source": { "source": "local", "path": "./plugins/icloud-mcp-connector" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" },
+      "category": "Productivity"
+    }
+  ]
+}

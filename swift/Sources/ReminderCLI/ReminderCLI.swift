@@ -11,6 +11,7 @@ struct ReminderCLI: AsyncParsableCommand {
         abstract: "Manage macOS Reminders using EventKit",
         subcommands: [
             AuthStatus.self,
+            Authorize.self,
             ListLists.self,
             ListReminders.self,
             GetReminder.self,
@@ -65,6 +66,35 @@ struct AuthStatus: ParsableCommand {
 // MARK: - Shared Utilities
 
 let eventStore = EKEventStore()
+
+/// Check existing permission only. Ordinary commands must never display a TCC prompt.
+func requireReminderAuthorization() throws {
+    let status = EKEventStore.authorizationStatus(for: .reminder)
+    if #available(macOS 14.0, *) {
+        guard status == .fullAccess else {
+            throw CLIError.accessDenied("Reminders full access is required. Run authorize only after approving this Mac's reminder scope.")
+        }
+    } else {
+        guard status == .authorized else {
+            throw CLIError.accessDenied("Reminders access is required. Run authorize only after approving this Mac's reminder scope.")
+        }
+    }
+}
+
+struct Authorize: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "authorize",
+        abstract: "Explicitly request macOS Reminders access for a configured scope"
+    )
+    @OptionGroup var pimOptions: PIMOptions
+
+    func run() async throws {
+        let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders)
+        try await requestReminderAccess()
+        outputJSON(["success": true, "authorization": "authorized"])
+    }
+}
 
 func requestReminderAccess() async throws {
     if #available(macOS 14.0, *) {
@@ -171,7 +201,8 @@ func listToDict(_ list: EKCalendar) -> [String: Any] {
         "title": list.title,
         "color": list.cgColor?.components?.map { Int($0 * 255) } ?? [],
         "allowsModifications": list.allowsContentModifications,
-        "source": list.source?.title ?? "Unknown"
+        "source": list.source?.title ?? "Unknown",
+        "sourceId": list.source?.sourceIdentifier ?? ""
     ]
 }
 
@@ -479,46 +510,116 @@ func alarmToDict(_ alarm: EKAlarm) -> [String: Any] {
 
 // MARK: - Config Helpers
 
-/// Get only the reminder lists allowed by the current PIM config.
-func allowedLists(config: PIMConfiguration) -> [EKCalendar] {
+/// Validate the scope before any authorization or EventKit data access.
+func requireReminderScope(_ config: DomainFilterConfig, deletion: Bool = false, writing: Bool = false) throws {
+    guard config.hasExplicitScope else {
+        throw CLIError.accessDenied("Reminder list access requires enabled allowlist configuration with exact item and account IDs.")
+    }
+    guard !deletion || config.allowDeletes else {
+        throw CLIError.accessDenied("Reminder list deletion is disabled. Set allow_deletes explicitly for the approved scope to enable it.")
+    }
+    guard !writing || config.allowWrites else {
+        throw CLIError.accessDenied("Reminder writes are disabled. Set allow_writes explicitly for the approved scope to enable them.")
+    }
+}
+
+/// Pure selection seam: a name can identify one scoped item only; IDs win exactly.
+func selectAllowedList<T>(
+    nameOrId: String,
+    exactIDOnly: Bool = false,
+    items: [T],
+    config: DomainFilterConfig,
+    name: (T) -> String,
+    id: (T) -> String,
+    accountID: (T) -> String
+) throws -> T {
+    try requireReminderScope(config)
+    let allowed = items.filter {
+        ItemFilter.isAllowed(name: name($0), id: id($0), accountID: accountID($0), config: config)
+    }
+    if let exact = allowed.first(where: { id($0) == nameOrId }) { return exact }
+    guard !exactIDOnly else {
+        throw CLIError.notFound("The configured default ID is unavailable within the allowed scope.")
+    }
+    let matches = allowed.filter { name($0).caseInsensitiveCompare(nameOrId) == .orderedSame }
+    guard !matches.isEmpty else {
+        throw CLIError.notFound("No allowed reminder list matches the requested name or ID.")
+    }
+    guard matches.count == 1 else {
+        throw CLIError.invalidInput("Reminder list name is ambiguous within the allowed scope. Use an exact item ID.")
+    }
+    return matches[0]
+}
+
+/// Get only explicitly allowed items from explicitly allowed EventKit sources.
+func allowedLists(config: PIMConfiguration) throws -> [EKCalendar] {
+    try requireReminderScope(config.reminders)
     let all = eventStore.calendars(for: .reminder)
-    return ItemFilter.filter(items: all, config: config.reminders, name: { $0.title }, id: { $0.calendarIdentifier })
+    let allowed = ItemFilter.filter(
+        items: all, config: config.reminders, name: { $0.title },
+        id: { $0.calendarIdentifier }, accountID: { $0.source?.sourceIdentifier ?? "" }
+    )
+    guard !allowed.isEmpty else {
+        throw CLIError.accessDenied("No configured reminder list is available in an allowed account.")
+    }
+    return allowed
 }
 
-/// Validate that a reminder's list is accessible under the current config.
+/// Missing item/source identities are denied rather than treated as accessible.
 func validateReminderAccess(_ reminder: EKReminder, config: PIMConfiguration) throws {
-    guard let cal = reminder.calendar else { return }
-    guard ItemFilter.isAllowed(name: cal.title, id: cal.calendarIdentifier, config: config.reminders) else {
-        throw CLIError.accessDenied("Reminder list '\(cal.title)' is not in your allowed list. Run /apple-pim:configure to update access.")
+    guard let cal = reminder.calendar,
+          ItemFilter.isAllowed(
+            name: cal.title, id: cal.calendarIdentifier,
+            accountID: cal.source?.sourceIdentifier, config: config.reminders
+          ) else {
+        throw CLIError.accessDenied("The requested item is outside the configured reminder list and account scope.")
     }
 }
 
-/// Find a reminder list by name or ID, validating it's in the allowed list.
-func findAllowedList(nameOrId: String, config: PIMConfiguration) throws -> EKCalendar {
-    let allLists = eventStore.calendars(for: .reminder)
-    guard let cal = allLists.first(where: {
-        $0.calendarIdentifier == nameOrId || $0.title.lowercased() == nameOrId.lowercased()
-    }) else {
-        throw CLIError.notFound("Reminder list not found: \(nameOrId)")
-    }
-    guard ItemFilter.isAllowed(name: cal.title, id: cal.calendarIdentifier, config: config.reminders) else {
-        throw CLIError.accessDenied("Reminder list '\(cal.title)' is not in your allowed list. Run /apple-pim:configure to update access.")
-    }
-    return cal
+func findAllowedList(nameOrId: String, exactIDOnly: Bool = false, config: PIMConfiguration) throws -> EKCalendar {
+    try requireReminderScope(config.reminders)
+    return try selectAllowedList(
+        nameOrId: nameOrId, exactIDOnly: exactIDOnly, items: eventStore.calendars(for: .reminder), config: config.reminders,
+        name: { $0.title }, id: { $0.calendarIdentifier }, accountID: { $0.source?.sourceIdentifier ?? "" }
+    )
 }
 
-/// Resolve the target list for a create operation: explicit name > config default > system default.
+/// A configured default must be a stable allowed ID. Never use the system default.
+func targetListSelector(explicit: String?, defaultID: String?, config: DomainFilterConfig) throws -> String {
+    try requireReminderScope(config)
+    if let explicit = explicit, !explicit.isEmpty { return explicit }
+    guard let defaultID = defaultID, config.items.contains(defaultID) else {
+        throw CLIError.invalidInput("Specify an allowed reminder list or configure its exact ID as the default.")
+    }
+    return defaultID
+}
+
 func resolveTargetList(explicit: String?, config: PIMConfiguration) throws -> EKCalendar {
-    if let name = explicit {
-        return try findAllowedList(nameOrId: name, config: config)
+    let selector = try targetListSelector(explicit: explicit, defaultID: config.defaultReminderList, config: config.reminders)
+    return try findAllowedList(nameOrId: selector, exactIDOnly: explicit == nil || explicit?.isEmpty == true, config: config)
+}
+
+/// Exact ID selection operates on records already returned by a scoped predicate.
+func selectScopedReminder<T>(id: String, items: [T], identifier: (T) -> String) throws -> T {
+    let matches = items.filter { identifier($0) == id }
+    guard matches.count == 1 else {
+        throw CLIError.notFound("No unique accessible reminder matches the requested ID.")
     }
-    if let defaultName = config.defaultReminderList {
-        return try findAllowedList(nameOrId: defaultName, config: config)
+    return matches[0]
+}
+
+func scopedReminders(config: PIMConfiguration) async throws -> [EKReminder] {
+    let lists = try allowedLists(config: config)
+    let predicate = eventStore.predicateForReminders(in: lists)
+    let reminders = await withCheckedContinuation { (continuation: CheckedContinuation<[EKReminder], Never>) in
+        eventStore.fetchReminders(matching: predicate) { continuation.resume(returning: $0 ?? []) }
     }
-    guard let systemDefault = eventStore.defaultCalendarForNewReminders() else {
-        throw CLIError.notFound("No default reminder list available")
-    }
-    return systemDefault
+    return reminders.filter { (try? validateReminderAccess($0, config: config)) != nil }
+}
+
+func findAllowedReminder(id: String, config: PIMConfiguration) async throws -> EKReminder {
+    let reminders = try await scopedReminders(config: config)
+    return try selectScopedReminder(id: id, items: reminders, identifier: { $0.calendarItemIdentifier })
 }
 
 // MARK: - Recurrence Helpers
@@ -659,10 +760,10 @@ struct ListLists: AsyncParsableCommand {
     @OptionGroup var pimOptions: PIMOptions
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
-        let lists = allowedLists(config: config)
+        try requireReminderScope(config.reminders)
+        try requireReminderAuthorization()
+        let lists = try allowedLists(config: config)
         let result = lists.map { listToDict($0) }
 
         outputJSON([
@@ -693,17 +794,17 @@ struct ListReminders: AsyncParsableCommand {
     var limit: Int = 100
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders)
+        try requireReminderAuthorization()
 
         // Resolve lists: explicit filter > all allowed lists
-        var calendars: [EKCalendar]?
+        var calendars: [EKCalendar]
         if let listFilter = list {
             let cal = try findAllowedList(nameOrId: listFilter, config: config)
             calendars = [cal]
-        } else if config.reminders.mode != .all {
-            calendars = allowedLists(config: config)
+        } else {
+            calendars = try allowedLists(config: config)
         }
 
         let predicate = eventStore.predicateForReminders(in: calendars)
@@ -729,6 +830,7 @@ struct ListReminders: AsyncParsableCommand {
         let endOfWeek = weekInterval?.end ?? calendar.date(byAdding: .day, value: 7, to: startOfToday)!
 
         let filtered: [[String: Any]] = reminders
+            .filter { (try? validateReminderAccess($0, config: config)) != nil }
             .filter { reminder in
                 // First apply completion filter
                 if !includeCompleted && reminder.isCompleted { return false }
@@ -804,15 +906,11 @@ struct GetReminder: AsyncParsableCommand {
     var id: String
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders)
+        try requireReminderAuthorization()
 
-        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
-            throw CLIError.notFound("Reminder not found: \(id)")
-        }
-
-        try validateReminderAccess(reminder, config: config)
+        let reminder = try await findAllowedReminder(id: id, config: config)
 
         outputJSON([
             "success": true,
@@ -842,17 +940,17 @@ struct SearchReminders: AsyncParsableCommand {
     var limit: Int = 50
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders)
+        try requireReminderAuthorization()
 
         // Resolve lists: explicit filter > all allowed lists
-        var calendars: [EKCalendar]?
+        var calendars: [EKCalendar]
         if let listFilter = list {
             let cal = try findAllowedList(nameOrId: listFilter, config: config)
             calendars = [cal]
-        } else if config.reminders.mode != .all {
-            calendars = allowedLists(config: config)
+        } else {
+            calendars = try allowedLists(config: config)
         }
 
         let predicate = eventStore.predicateForReminders(in: calendars)
@@ -865,6 +963,7 @@ struct SearchReminders: AsyncParsableCommand {
 
         let queryLower = query.lowercased()
         let filtered = reminders
+            .filter { (try? validateReminderAccess($0, config: config)) != nil }
             .filter { reminder in
                 let title = reminder.title?.lowercased() ?? ""
                 let notes = reminder.notes?.lowercased() ?? ""
@@ -932,9 +1031,9 @@ struct CreateReminder: AsyncParsableCommand {
     var location: String?
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, writing: true)
+        try requireReminderAuthorization()
 
         let reminder = EKReminder(eventStore: eventStore)
         reminder.title = title
@@ -1008,15 +1107,11 @@ struct CompleteReminder: AsyncParsableCommand {
     var undo: Bool = false
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, writing: true)
+        try requireReminderAuthorization()
 
-        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
-            throw CLIError.notFound("Reminder not found: \(id)")
-        }
-
-        try validateReminderAccess(reminder, config: config)
+        let reminder = try await findAllowedReminder(id: id, config: config)
 
         reminder.isCompleted = !undo
         if !undo {
@@ -1076,15 +1171,11 @@ struct UpdateReminder: AsyncParsableCommand {
     var location: String?
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, writing: true)
+        try requireReminderAuthorization()
 
-        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
-            throw CLIError.notFound("Reminder not found: \(id)")
-        }
-
-        try validateReminderAccess(reminder, config: config)
+        let reminder = try await findAllowedReminder(id: id, config: config)
 
         if let newTitle = title {
             reminder.title = newTitle
@@ -1186,15 +1277,11 @@ struct DeleteReminder: AsyncParsableCommand {
     var id: String
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, deletion: true, writing: true)
+        try requireReminderAuthorization()
 
-        guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
-            throw CLIError.notFound("Reminder not found: \(id)")
-        }
-
-        try validateReminderAccess(reminder, config: config)
+        let reminder = try await findAllowedReminder(id: id, config: config)
 
         let reminderInfo = reminderToDict(reminder)
         try eventStore.remove(reminder, commit: true)
@@ -1256,9 +1343,9 @@ struct BatchCreateReminder: AsyncParsableCommand {
     var json: String
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, writing: true)
+        try requireReminderAuthorization()
         let reminders = try decodeBatchReminders(json)
 
         var createdReminders: [[String: Any]] = []
@@ -1368,9 +1455,9 @@ struct BatchCompleteReminder: AsyncParsableCommand {
     var undo: Bool = false
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, writing: true)
+        try requireReminderAuthorization()
 
         guard let data = json.data(using: .utf8),
               let ids = try? JSONDecoder().decode([String].self, from: data) else {
@@ -1384,11 +1471,12 @@ struct BatchCompleteReminder: AsyncParsableCommand {
         var completed: [[String: Any]] = []
         var errors: [[String: Any]] = []
 
+        let scoped = try await scopedReminders(config: config)
         for id in ids {
-            guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
+            guard let reminder = try? selectScopedReminder(id: id, items: scoped, identifier: { $0.calendarItemIdentifier }) else {
                 errors.append([
                     "id": id,
-                    "error": "Reminder not found: \(id)"
+                    "error": "No unique accessible reminder matches the requested ID."
                 ])
                 continue
             }
@@ -1449,9 +1537,9 @@ struct BatchDeleteReminder: AsyncParsableCommand {
     var json: String
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders, deletion: true, writing: true)
+        try requireReminderAuthorization()
 
         guard let data = json.data(using: .utf8),
               let ids = try? JSONDecoder().decode([String].self, from: data) else {
@@ -1465,11 +1553,12 @@ struct BatchDeleteReminder: AsyncParsableCommand {
         var deleted: [[String: Any]] = []
         var errors: [[String: Any]] = []
 
+        let scoped = try await scopedReminders(config: config)
         for id in ids {
-            guard let reminder = eventStore.calendarItem(withIdentifier: id) as? EKReminder else {
+            guard let reminder = try? selectScopedReminder(id: id, items: scoped, identifier: { $0.calendarItemIdentifier }) else {
                 errors.append([
                     "id": id,
-                    "error": "Reminder not found: \(id)"
+                    "error": "No unique accessible reminder matches the requested ID."
                 ])
                 continue
             }
@@ -1571,13 +1660,10 @@ struct RepairDates: AsyncParsableCommand {
     var completed: Bool = false
 
     func run() async throws {
-        try await requestReminderAccess()
-
         let config = pimOptions.loadConfig()
-        var calendars: [EKCalendar]?
-        if config.reminders.mode != .all {
-            calendars = allowedLists(config: config)
-        }
+        try requireReminderScope(config.reminders, writing: apply)
+        try requireReminderAuthorization()
+        let calendars = try allowedLists(config: config)
 
         let predicate = eventStore.predicateForReminders(in: calendars)
         let reminders = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[EKReminder], Error>) in
@@ -1589,7 +1675,15 @@ struct RepairDates: AsyncParsableCommand {
         var errors: [[String: Any]] = []
         var scanned = 0
 
-        for reminder in reminders where completed || !reminder.isCompleted {
+        for reminder in reminders {
+            // Verify returned items before reading fields or applying repairs.
+            do {
+                try validateReminderAccess(reminder, config: config)
+            } catch {
+                errors.append(["error": error.localizedDescription])
+                continue
+            }
+            guard completed || !reminder.isCompleted else { continue }
             scanned += 1
 
             // Start date but no due date: Reminders.app shows these as dateless.
@@ -1698,17 +1792,20 @@ struct ConfigShow: ParsableCommand {
 struct ConfigInit: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "init",
-        abstract: "List available reminder lists for configuration setup"
+        abstract: "Show only reminder lists already allowed by explicit configuration"
     )
 
     @OptionGroup var pimOptions: PIMOptions
 
     func run() async throws {
-        try await requestReminderAccess()
+        let config = pimOptions.loadConfig()
+        try requireReminderScope(config.reminders)
+        try requireReminderAuthorization()
         let ctx = pimOptions.outputContext
 
-        let lists = eventStore.calendars(for: .reminder).map { listToDict($0) }
-        let defaultRem = eventStore.defaultCalendarForNewReminders()?.title ?? ""
+        let allowed = try allowedLists(config: config)
+        let lists = allowed.map { listToDict($0) }
+        let defaultRem = allowed.first { $0.calendarIdentifier == config.defaultReminderList }?.calendarIdentifier ?? ""
 
         pimOutput(
             [
@@ -1728,4 +1825,3 @@ struct ConfigInit: AsyncParsableCommand {
         )
     }
 }
-

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "icloud-mcp-connector": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/scripts/plugin-launcher.mjs"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": { "APPLE_PIM_CONFIG_DIR": "${PLUGIN_DATA}/private-config" }
+    }
+  }
+}

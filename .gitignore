@@ -63,3 +63,10 @@ openclaw/dist/
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+# Private connector state must stay outside this repository. These patterns
+# provide a second guard for accidental local copies.
+private-pim-config/
+config.local.json
+*.private.json
+.env
+.env.*

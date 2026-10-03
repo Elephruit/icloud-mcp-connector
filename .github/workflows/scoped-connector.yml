@@ -1,0 +1,54 @@
+name: Scoped Connector
+
+on:
+  push:
+    branches: [main, feature/scoped-icloud-foundation]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scoped-connector-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-validation:
+    name: Synthetic Mac Connector
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+
+      - name: Install dependencies without lifecycle scripts
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm install --prefix mcp-server --ignore-scripts --no-audit --no-fund
+
+      - name: Native synthetic tests and build
+        working-directory: swift
+        run: |
+          swift test --filter 'PIMConfigTests|CalendarCLITests|ReminderCLITests|ContactsCLITests'
+          swift build -c release
+
+      - name: MCP unit tests and bundle
+        working-directory: mcp-server
+        run: |
+          npm test -- --exclude test/cli-runner-helper-proc.test.js
+          npm run build
+
+      - name: Scoped policy, native denial, Notes and plugin tests
+        run: node --test test/*.test.mjs
+
+      - name: Typecheck manual scope helper without executing it
+        run: swiftc -parse-as-library -typecheck scripts/enroll-native-test-scopes.swift
+
+      - name: Check patch formatting
+        run: git diff --check

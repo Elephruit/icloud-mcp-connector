@@ -10,6 +10,14 @@ import {
 } from "../../lib/tool-args.js";
 
 describe("buildCalendarDeleteArgs", () => {
+  it("forwards the scoped ID lookup window", () => {
+    expect(buildCalendarDeleteArgs({ id: "evt_123", from: "2026-01-01", to: "2026-01-02" })).toEqual([
+      "delete", "--id", "evt_123", "--from", "2026-01-01", "--to", "2026-01-02",
+    ]);
+    expect(buildCalendarUpdateArgs({ id: "evt_123", from: "2026-01-01", to: "2026-01-02" })).toEqual([
+      "update", "--id", "evt_123", "--from", "2026-01-01", "--to", "2026-01-02",
+    ]);
+  });
   it("uses safe single-occurrence delete by default", () => {
     expect(buildCalendarDeleteArgs({ id: "evt_123" })).toEqual([
       "delete",
@@ -26,6 +34,17 @@ describe("buildCalendarDeleteArgs", () => {
 });
 
 describe("buildCalendarCreateArgs", () => {
+  it("forwards an explicit timezone without adding alerts or invitees", () => {
+    const args = buildCalendarCreateArgs({
+      title: "Synthetic appointment", start: "2030-02-04T09:15:00-06:00",
+      end: "2030-02-04T10:45:00-06:00", timezone: "America/Chicago",
+    }, "synthetic-calendar-id");
+    expect(args).toEqual([
+      "create", "--title", "Synthetic appointment", "--start", "2030-02-04T09:15:00-06:00",
+      "--end", "2030-02-04T10:45:00-06:00", "--timezone", "America/Chicago",
+      "--calendar", "synthetic-calendar-id",
+    ]);
+  });
   it("maps recurrence and url args for calendar create", () => {
     const args = buildCalendarCreateArgs(
       {

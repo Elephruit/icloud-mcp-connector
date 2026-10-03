@@ -7,6 +7,7 @@ on:
 
 jobs:
   check:
+    if: github.repository == 'omarshahine/apple-pim'
     runs-on: ubuntu-latest
     defaults:
       run:

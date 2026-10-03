@@ -6,7 +6,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 // Bundled: esbuild inlines this at build time, and `scripts/bump-version.sh`
 // rewrites package.json then rebuilds dist, so the reported version cannot drift
 // from the manifest the way a hardcoded literal did.
@@ -16,41 +16,23 @@ import {
   markToolResult,
   getDatamarkingPreamble,
 } from "../lib/sanitize.js";
-import { createCLIRunner, findSwiftBinDir } from "../lib/cli-runner.js";
-import { tools } from "../lib/schemas.js";
-import { withAgentDX } from "../lib/agent-dx.js";
-import { handleCalendar } from "../lib/handlers/calendar.js";
-import { handleReminder } from "../lib/handlers/reminder.js";
-import { handleContact } from "../lib/handlers/contact.js";
-import { handleMail } from "../lib/handlers/mail.js";
-import { handleApplePim } from "../lib/handlers/apple-pim.js";
+import { createCLIRunner } from "../lib/cli-runner.js";
+import { createScopedDispatcher, scopedTools } from "../lib/scoped-dispatcher.js";
+import { createNotesAdapter } from "../lib/notes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// MCP-specific binary search locations (relative to bundled server)
-const mcpLocations = [
-  join(__dirname, "..", "swift", ".build", "release"),
-  join(__dirname, "..", "..", "swift", ".build", "release"),
-];
-
-const SWIFT_BIN_DIR = findSwiftBinDir(mcpLocations);
-const { runCLI } = createCLIRunner(SWIFT_BIN_DIR);
-
-// Wrap handlers with agent DX features (fields, dryRun, schema)
-const handlers = {
-  calendar: withAgentDX("calendar", handleCalendar),
-  reminder: withAgentDX("reminder", handleReminder),
-  contact: withAgentDX("contact", handleContact),
-  mail: withAgentDX("mail", handleMail),
-  "apple-pim": withAgentDX("apple-pim", handleApplePim),
-};
-
-// Main tool dispatcher
-async function handleTool(name, args) {
-  const handler = handlers[name];
-  if (!handler) throw new Error(`Unknown tool: ${name}`);
-  return await handler(args, runCLI);
+// Never silently select an older ~/.local/bin installation or launch a helper
+// with a different permission identity. Only this checkout's reviewed binaries.
+const checkoutRoot = basename(__dirname) === "dist" ? join(__dirname, "..", "..") : join(__dirname, "..");
+const SWIFT_BIN_DIR = join(checkoutRoot, "swift", ".build", "release");
+const cliEnv = {};
+for (const key of ["APPLE_PIM_CONFIG_DIR", "APPLE_PIM_PROFILE", "APPLE_PIM_DATE_FORMAT"]) {
+  if (process.env[key] !== undefined) cliEnv[key] = process.env[key];
 }
+const { runCLI } = createCLIRunner(SWIFT_BIN_DIR, cliEnv, { helperExists: () => false });
+const { runNotes } = createNotesAdapter({ binDir: SWIFT_BIN_DIR });
+const handleTool = createScopedDispatcher({ runCLI, runNotes });
 
 // Create and run server
 const server = new Server(
@@ -66,7 +48,7 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools };
+  return { tools: scopedTools };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {

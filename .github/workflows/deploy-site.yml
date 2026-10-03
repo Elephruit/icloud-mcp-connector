@@ -8,6 +8,7 @@ on:
 
 jobs:
   deploy:
+    if: github.repository == 'omarshahine/apple-pim'
     runs-on: ubuntu-latest
     permissions:
       contents: read
