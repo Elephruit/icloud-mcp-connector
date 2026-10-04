@@ -36,7 +36,7 @@ test("portable manifest and Codex overlay share scoped identity and preserve ups
   ]);
   assert.equal(manifest.$schema, "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
   assert.equal(manifest.name, "icloud-mcp-connector");
-  assert.equal(manifest.version, "0.2.0");
+  assert.equal(manifest.version, "0.2.1");
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.repository, "https://github.com/Elephruit/icloud-mcp-connector");
   assert.match(manifest.description, /apple-pim and its existing stdio MCP/);

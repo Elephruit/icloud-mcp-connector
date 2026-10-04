@@ -86,13 +86,22 @@ required by this adapter.
 Every data request requires exact `accountId` and `mailboxId`. Lists/searches
 default to seven days and 20 results; requests may cover at most the last 31
 days and return at most 50 results. Search matches subject/sender metadata.
-The adapter inspects at most 200 candidate message metadata records per call
-and orders the inspected subset by received date. Native candidate enumeration
-can exceed that subset; coverage reports the eligible count, inspected count,
-scan truncation and result limit. `eligibleCount` counts in-window messages
-among inspected candidates, not the entire mailbox. Newly arrived or future
-messages outside the fixed window are skipped before text/header/body reads.
-This is not a complete inbox history.
+List/search inspect at most the requested `limit` (default 20, maximum 50),
+including nonmatching search candidates. They request individual elements from
+the native date-filtered collection instead of materializing all matching
+references. `offset` starts at zero and a page must remain within the first
+200 candidates. Continue using the returned `nextOffset`; keep a separate
+total review budget and deduplicate mailbox-local IDs across pages.
+
+Coverage reports the inspected count, eligible count, next offset, page-end
+status and scan truncation. `eligibleCount` counts in-window messages among
+inspected candidates, not the whole mailbox. A full page is conservatively
+marked truncated without looking beyond its budget. Mail's native index order
+is unspecified; results are sorted by received date only within the inspected
+page. Concurrent arrivals or moves can repeat or skip items between pages.
+Native filtering can still be slow and the existing deadline remains enforced.
+Newly arrived or future messages outside the fixed window are skipped before
+text/header/body reads. A bounded page does not establish complete inbox history.
 
 `get` reads one exact mailbox-local numeric message ID within the date window.
 Plain-text content is limited to 16,384 characters; metadata is also bounded.

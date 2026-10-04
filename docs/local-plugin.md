@@ -1,7 +1,7 @@
 # Local Mac plugin
 
 This source package adds **iCloud MCP Connector** (`icloud-mcp-connector`, version
-`0.2.0`) to the scoped fork. It contains portable `plugin.json` / `mcp.json`, a
+`0.2.1`) to the scoped fork. It contains portable `plugin.json` / `mcp.json`, a
 matching Codex compatibility manifest, a scoped workflow skill and a guarded
 Node launcher. The upstream Claude/OpenClaw version `3.18.0` and Omar Shahine's
 MIT copyright remain unchanged; these are separate package identities.

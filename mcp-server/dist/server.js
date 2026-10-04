@@ -18795,7 +18795,10 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
   if (selected.length !== 1) throw new Error("Mail request lacks an exact allowed account/mailbox scope");
   if (p.op === "get") return JSON.stringify({success:true,message:fullMessage(selected[0],p.id,p.expectedRFC)});
   var records = p.op === "snapshot" ? p.mailboxes.filter(function(record) { return record.accountId === p.accountId; }) : selected;
-  var output = [], seen = {}, inspected = 0, eligibleCount = 0, scanTruncated = false;
+  // List/search use lazy indexed specifiers, without materializing a full array.
+  // Mail can still spend time evaluating its native date predicate per index.
+  var inspectionBudget = p.op === "snapshot" ? 200 : Math.min(200,p.limit);
+  var output = [], seen = {}, inspected = 0, eligibleCount = 0, scanTruncated = false, pageEndReached = false, pagePositions = 0;
   if (p.op === "snapshot") {
     var seed = metadata(selected[0],p.id);
     var seedMessage = locate(selected[0],p.id,seed.messageId);
@@ -18804,12 +18807,21 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
     output.push(seed); seen[seed.key] = true; inspected = 1; eligibleCount = 1;
   }
   for (var boxIndex = 0; boxIndex < records.length; boxIndex++) {
+    if (inspected >= inspectionBudget) { scanTruncated = true; break; }
     var record = records[boxIndex], mailbox = resolveMailbox(record);
-    var candidates = mailbox.messages.whose({dateReceived:{">=":new Date(p.sinceEpoch)}})();
-    for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
-      var localId = String(candidates[candidateIndex].id()), key = record.id + "/" + localId;
+    var filtered = mailbox.messages.whose({dateReceived:{">=":new Date(p.sinceEpoch)}});
+    var candidates = p.op === "snapshot" ? filtered() : filtered;
+    var startIndex = p.op === "snapshot" ? 0 : p.offset;
+    var endIndex = p.op === "snapshot" ? candidates.length : p.offset + inspectionBudget;
+    for (var candidateIndex = startIndex; candidateIndex < endIndex; candidateIndex++) {
+      if (inspected >= inspectionBudget) { scanTruncated = true; break; }
+      var candidate = p.op === "snapshot" ? candidates[candidateIndex] : candidates.at(candidateIndex);
+      if (p.op !== "snapshot") {
+        if (candidate.exists() !== true) { pageEndReached = true; break; }
+        pagePositions++;
+      }
+      var localId = String(candidate.id()), key = record.id + "/" + localId;
       if (seen[key]) continue;
-      if (inspected >= 200) { scanTruncated = true; break; }
       inspected++;
       var data = metadata(record,localId,true);
       seen[key] = true;
@@ -18827,7 +18839,14 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
   output.sort(function(a,b) { return Date.parse(b.dateReceived) - Date.parse(a.dateReceived) || (a.id < b.id ? -1 : 1); });
   var resultLimited = p.op !== "snapshot" && output.length > p.limit;
   if (p.op !== "snapshot") output = output.slice(0,p.limit);
-  return JSON.stringify({success:true,messages:output,coverage:{since:p.since,until:p.until,inspected:inspected,eligibleCount:eligibleCount,scanTruncated:scanTruncated,resultLimited:resultLimited,ordering:"newest among inspected candidates",historicalConversationComplete:false}});
+  var coverage = {since:p.since,until:p.until,inspected:inspected,eligibleCount:eligibleCount,scanTruncated:scanTruncated,resultLimited:resultLimited,ordering:"newest among inspected candidates",historicalConversationComplete:false};
+  if (p.op !== "snapshot") {
+    coverage.scanTruncated = p.offset > 0 || !pageEndReached;
+    coverage.offset = p.offset; coverage.pageEndReached = pageEndReached;
+    coverage.nextOffset = !pageEndReached && p.offset + pagePositions < 200 ? p.offset + pagePositions : null;
+    coverage.ordering = "received date within bounded native-index page; mailbox order is unspecified";
+  }
+  return JSON.stringify({success:true,messages:output,coverage:coverage});
 }
 `;
 
@@ -18846,7 +18865,8 @@ var mailTool = {
       id: { type: "string", pattern: "^[1-9][0-9]*$", description: "Local numeric message ID for get/thread; never used outside the selected mailbox." },
       query: { type: "string", minLength: 1, maxLength: 2048, description: "Search subject/sender metadata only." },
       since: { type: "string", format: "date-time", description: "UTC lower date bound; defaults to seven days ago, maximum 31 days." },
-      limit: { type: "integer", minimum: 1, maximum: 50, description: "Result limit, default 20. Maximum 200 inspected header candidates." }
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "List/search inspection budget, default 20; matches may be partial. Thread body limit with at most 200 header candidates." },
+      offset: { type: "integer", minimum: 0, maximum: 199, description: "List/search index in the scoped date-filtered collection, default 0. offset+limit must not exceed 200; native ordering and page stability are unspecified." }
     },
     required: ["action"],
     additionalProperties: false
@@ -18950,8 +18970,8 @@ async function runScopedMailScript(payload, { accessCliPath, preflightImpl = che
 function buildMailInvocation(args, config2, now = /* @__PURE__ */ new Date()) {
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Mail arguments must be an object");
   const fields = {
-    list: ["action", "accountId", "mailboxId", "since", "limit"],
-    search: ["action", "accountId", "mailboxId", "since", "limit", "query"],
+    list: ["action", "accountId", "mailboxId", "since", "limit", "offset"],
+    search: ["action", "accountId", "mailboxId", "since", "limit", "query", "offset"],
     get: ["action", "accountId", "mailboxId", "since", "id"],
     thread: ["action", "accountId", "mailboxId", "since", "limit", "id"]
   }[args.action];
@@ -18970,9 +18990,11 @@ function buildMailInvocation(args, config2, now = /* @__PURE__ */ new Date()) {
   if (sinceEpoch < untilEpoch - 31 * 864e5 || sinceEpoch > untilEpoch) throw new Error("Mail date window must be within the last 31 days");
   const limit = args.limit ?? 20;
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("Mail limit must be an integer from 1 to 50");
+  const offset = ["list", "search"].includes(args.action) ? args.offset ?? 0 : void 0;
+  if (offset !== void 0 && (!Number.isInteger(offset) || offset < 0 || offset > 199 || offset + limit > 200)) throw new Error("Mail offset requires 0 to 199 with offset+limit at most 200");
   if (args.action === "search" && (typeof args.query !== "string" || !args.query.trim() || args.query.length > 2048 || /[\u0000]/u.test(args.query))) throw new Error("Mail query must be nonempty bounded text");
   if (["get", "thread"].includes(args.action) && (typeof args.id !== "string" || !/^[1-9]\d*$/u.test(args.id) || !Number.isSafeInteger(Number(args.id)))) throw new Error("Mail id must be an exact positive local numeric message ID string");
-  return { op: args.action === "thread" ? "snapshot" : args.action, accountId: args.accountId, mailboxId: args.mailboxId, ...args.id ? { id: args.id } : {}, ...args.query ? { query: args.query } : {}, limit, sinceEpoch, untilEpoch, since: new Date(sinceEpoch).toISOString(), until: now.toISOString(), mailboxes: config2.mailboxes.filter((entry) => entry.accountId === args.accountId).map((entry) => ({ id: entry.id, accountId: entry.accountId, path: [...entry.path] })) };
+  return { op: args.action === "thread" ? "snapshot" : args.action, accountId: args.accountId, mailboxId: args.mailboxId, ...args.id ? { id: args.id } : {}, ...args.query ? { query: args.query } : {}, ...offset !== void 0 ? { offset } : {}, limit, sinceEpoch, untilEpoch, since: new Date(sinceEpoch).toISOString(), until: now.toISOString(), mailboxes: config2.mailboxes.filter((entry) => entry.accountId === args.accountId).map((entry) => ({ id: entry.id, accountId: entry.accountId, path: [...entry.path] })) };
 }
 function safeMessage(message, invocation, { body = false, snapshot = false, anyAllowedMailbox = false } = {}) {
   const record2 = invocation.mailboxes.find((entry) => entry.id === message?.mailboxId && entry.accountId === message?.accountId);
@@ -18996,7 +19018,15 @@ function safeMessage(message, invocation, { body = false, snapshot = false, anyA
 }
 function safeCoverage(coverage, invocation) {
   if (!coverage || coverage.since !== invocation.since || coverage.until !== invocation.until || !Number.isInteger(coverage.inspected) || coverage.inspected < 0 || coverage.inspected > 200 || !Number.isSafeInteger(coverage.eligibleCount) || coverage.eligibleCount < 0 || typeof coverage.scanTruncated !== "boolean" || typeof coverage.resultLimited !== "boolean" || coverage.historicalConversationComplete !== false) throw new Error("Mail coverage response is invalid");
-  return { since: invocation.since, until: invocation.until, inspected: coverage.inspected, eligibleCount: coverage.eligibleCount, scanTruncated: coverage.scanTruncated, resultLimited: coverage.resultLimited, ordering: "newest among inspected candidates", historicalConversationComplete: false };
+  const output = { since: invocation.since, until: invocation.until, inspected: coverage.inspected, eligibleCount: coverage.eligibleCount, scanTruncated: coverage.scanTruncated, resultLimited: coverage.resultLimited, ordering: "newest among inspected candidates", historicalConversationComplete: false };
+  if (["list", "search"].includes(invocation.op)) {
+    if (coverage.inspected > invocation.limit || coverage.eligibleCount > coverage.inspected || coverage.offset !== invocation.offset || typeof coverage.pageEndReached !== "boolean" || coverage.nextOffset !== null && (!Number.isInteger(coverage.nextOffset) || coverage.nextOffset <= invocation.offset || coverage.nextOffset > invocation.offset + invocation.limit || coverage.nextOffset >= 200) || coverage.pageEndReached && coverage.nextOffset !== null) throw new Error("Mail pagination coverage is invalid");
+    output.offset = coverage.offset;
+    output.nextOffset = coverage.nextOffset;
+    output.pageEndReached = coverage.pageEndReached;
+    output.ordering = "received date within bounded native-index page; mailbox order is unspecified";
+  }
+  return output;
 }
 function createScopedMailAdapter({ binDir, env = process.env, loadConfig = () => loadMailConfig(env), runScript, now = () => /* @__PURE__ */ new Date(), monotonicNow = () => performance.now(), operationTimeoutMs = 45e3 } = {}) {
   if (!Number.isInteger(operationTimeoutMs) || operationTimeoutMs < 1 || operationTimeoutMs > 45e3) throw new Error("Mail overall operation timeout must be 1 to 45000 milliseconds");

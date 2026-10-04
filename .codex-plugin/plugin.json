@@ -1,6 +1,6 @@
 {
   "name": "icloud-mcp-connector",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Built on Omar Shahine's MIT-licensed apple-pim and its existing stdio MCP server. Adds scoped Calendar, Reminders, Contacts, Notes and read-only iCloud Mail tools, plus a local Codex plugin; direct cloud access for dots remains in development.",
   "author": {
     "name": "Elephruit",

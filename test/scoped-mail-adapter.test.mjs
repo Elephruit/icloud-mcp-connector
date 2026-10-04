@@ -20,14 +20,22 @@ const mail = { enabled: true, accounts: [accountId], mailboxes: [inbox, sent], a
 const listArgs = { action: "list", accountId, mailboxId: inbox.id };
 const getArgs = { action: "get", accountId, mailboxId: inbox.id, id: "1" };
 
-function collection(items) {
+function collection(items, { beforeMaterialize = () => {}, onIndex = () => {} } = {}) {
   const getter = () => items;
-  getter.whose = (predicate) => () => items.filter((item) => Object.entries(predicate).every(([field, expected]) => {
+  getter.whose = (predicate) => {
+    const matches = () => items.filter((item) => Object.entries(predicate).every(([field, expected]) => {
     const actual = field === "name" && item.nativeName !== undefined ? item.nativeName : item[field]();
     if (field === "dateReceived") return actual.getTime() >= expected[">="].getTime();
     // Native name comparisons can be insensitive; the fixed script rechecks.
     return typeof actual === "string" && typeof expected === "string" ? actual.toLowerCase() === expected.toLowerCase() : actual === expected;
-  }));
+    }));
+    const query = () => { beforeMaterialize(predicate); return matches(); };
+    query.at = (index) => {
+      onIndex(index); const item = matches()[index];
+      return item ? { ...item, exists: () => true } : { exists: () => false, id: () => { throw new Error("NONEXISTENT_ID_READ"); } };
+    };
+    return query;
+  };
   return getter;
 }
 
@@ -47,6 +55,7 @@ function message(id, rfcId, options = {}) {
 }
 
 function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, icloud = true, wrongMailboxOwner, configuration = mail } = {}) {
+  let activeOp; const indexedPositions = [];
   const seed = message(1, "root@example.com"), reply = message(2, "reply@example.com", { reference: "root@example.com", date: "2026-10-04T10:00:00Z" }), unrelated = message(3, "unrelated@example.com");
   const inboxRows = rows ?? [seed, unrelated];
   const wrongOwner = wrongMailboxOwner && {
@@ -57,7 +66,10 @@ function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, iclo
     nativeName: name,
     account: () => wrongOwner ?? account,
     name: () => { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_NAME"); return name; },
-    get messages() { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_MESSAGES"); return collection(data.map((entry) => entry.native)); },
+    get messages() {
+      if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_MESSAGES");
+      return collection(data.map((entry) => entry.native), { beforeMaterialize: (predicate) => { if (predicate.dateReceived && activeOp !== "snapshot") throw new Error("FULL_DATE_FILTER_MATERIALIZATION_FORBIDDEN"); }, onIndex: (index) => indexedPositions.push(index) });
+    },
     get mailboxes() { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_CHILDREN"); return collection([]); },
   });
   const inboxBox = mailbox(inboxName, inboxRows), sentBox = mailbox("Sent", [reply]);
@@ -76,12 +88,13 @@ function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, iclo
   const scriptContext = { Application: (path) => { assert.equal(path, "/System/Applications/Mail.app"); return nativeMail; }, Date, Set, JSON };
   const calls = [];
   const runScript = async (payload) => {
+    activeOp = payload.op;
     calls.push(payload);
     const output = runInNewContext(SCOPED_MAIL_JXA + "\nrun(nativeArgv)", { ...scriptContext, nativeArgv: [JSON.stringify(payload)] }, { timeout: 2000 });
     return JSON.parse(output);
   };
   const adapter = createScopedMailAdapter({ now: () => now, loadConfig: async () => configuration, runScript });
-  return { ...adapter, runScript, calls, seed, reply, unrelated, inboxRows };
+  return { ...adapter, runScript, calls, seed, reply, unrelated, inboxRows, indexedPositions };
 }
 
 test("derived mailbox keys bind native account and exact ordered hierarchy, not names alone", () => {
@@ -169,17 +182,57 @@ test("duplicate local message IDs, old messages and read-status side effects fai
   assert.equal(changes.state.bodiesRead, 1); // No restoring/flag-setting operation.
 });
 
-test("body clipping is explicit and native candidate/header inspection is capped at 200", async () => {
+test("body clipping is explicit, list inspection follows limit and thread headers stay capped at 200", async () => {
   const large = message(1, "root@example.com", { body: "x".repeat(20000) });
   const read = await nativeFixture({ rows: [large] }).runMail(getArgs);
   assert.equal(read.message.content.length, 16384);
   assert.equal(read.message.contentTruncated, true);
   const rows = Array.from({ length: 205 }, (_, index) => message(index + 1, `synthetic-${index}@example.com`));
-  const result = await nativeFixture({ rows }).runMail(listArgs);
+  const fixture = nativeFixture({ rows });
+  const result = await fixture.runMail(listArgs);
   assert.equal(result.messages.length, 20);
-  assert.equal(result.coverage.inspected, 200);
+  assert.equal(result.coverage.inspected, 20);
   assert.equal(result.coverage.scanTruncated, true);
   assert.equal(rows.reduce((total, row) => total + row.state.bodiesRead, 0), 0);
+  assert.equal(rows.slice(20).reduce((total, row) => total + row.state.protectedReads, 0), 0);
+  const headers = await fixture.runScript(buildMailInvocation({ ...getArgs, action: "thread", limit: 1 }, validateMailConfig({ mail }), now));
+  assert.equal(headers.coverage.inspected, 200); assert.equal(headers.coverage.scanTruncated, true);
+});
+
+test("small list/search metadata budgets avoid extra candidate getters and report partial scans", async () => {
+  for (const action of ["list", "search"]) {
+    const rows = Array.from({ length: 12 }, (_, index) => message(index + 1, `budget-${index}@example.com`));
+    const fixture = nativeFixture({ rows });
+    const result = await fixture.runMail({ ...listArgs, action, limit: 5, ...(action === "search" ? { query: "nonmatching synthetic query" } : {}) });
+    assert.equal(result.coverage.inspected, 5); assert.equal(result.coverage.scanTruncated, true);
+    assert.equal(result.messages.length, action === "list" ? 5 : 0);
+    assert.equal(rows.slice(5).reduce((sum, row) => sum + row.state.protectedReads + row.state.bodiesRead, 0), 0);
+    assert.equal(rows.reduce((sum, row) => sum + row.state.bodiesRead, 0), 0);
+  }
+  const exact = await nativeFixture({ rows: Array.from({ length: 5 }, (_, index) => message(index + 1, `exact-${index}@example.com`)) }).runMail({ ...listArgs, limit: 5 });
+  assert.equal(exact.coverage.scanTruncated, true); // No extra end probe beyond budget.
+});
+
+test("lazy date-filtered pagination stays within page/index budget and never materializes references", async () => {
+  const rows = Array.from({ length: 12 }, (_, index) => message(index + 1, `page-${index}@example.com`));
+  const fixture = nativeFixture({ rows });
+  const second = await fixture.runMail({ ...listArgs, offset: 5, limit: 5 });
+  assert.deepEqual(fixture.indexedPositions, [5, 6, 7, 8, 9]);
+  assert.equal(second.coverage.offset, 5); assert.equal(second.coverage.nextOffset, 10); assert.equal(second.coverage.pageEndReached, false);
+  assert.ok(second.messages.every((item) => Number(item.id) >= 6 && Number(item.id) <= 10));
+  assert.equal(rows.slice(0, 5).concat(rows.slice(10)).reduce((sum, row) => sum + row.state.protectedReads, 0), 0);
+  const end = await fixture.runMail({ ...listArgs, offset: 10, limit: 5 });
+  assert.equal(end.coverage.inspected, 2); assert.equal(end.coverage.pageEndReached, true); assert.equal(end.coverage.nextOffset, null); assert.equal(end.coverage.scanTruncated, true);
+  const tiny = await nativeFixture({ rows: [message(1, "tiny@example.com")] }).runMail({ ...listArgs, limit: 5 });
+  assert.equal(tiny.coverage.pageEndReached, true); assert.equal(tiny.coverage.scanTruncated, false);
+});
+
+test("pagination bounds and action-specific offset validation deny before native dispatch", async () => {
+  for (const args of [{ ...listArgs, offset: -1 }, { ...listArgs, offset: 200 }, { ...listArgs, offset: 1.5 }, { ...listArgs, offset: "1" }, { ...listArgs, offset: 199, limit: 2 }, { ...getArgs, offset: 0 }, { ...getArgs, action: "thread", offset: 0 }]) {
+    const fixture = nativeFixture(); await assert.rejects(fixture.runMail(args)); assert.equal(fixture.calls.length, 0);
+  }
+  const last = await nativeFixture({ rows: [] }).runMail({ ...listArgs, offset: 199, limit: 1 });
+  assert.equal(last.coverage.nextOffset, null); assert.equal(last.coverage.pageEndReached, true);
 });
 
 test("scan skips future messages and new arrivals before protected getters; get and seed stay strict", async () => {
