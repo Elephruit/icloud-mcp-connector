@@ -10,9 +10,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, parse, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { CONTACTS_BUNDLE_ID, companionSigningPlan, normalizeSigningIdentity, signingIdentityAvailable, validateSignatureDescription } from "./lib/companion-signing.mjs";
 
 export const APP_NAME = "iCloud MCP Contacts.app";
-export const BUNDLE_ID = "com.elephruit.icloud-mcp-connector.contacts";
+export const BUNDLE_ID = CONTACTS_BUNDLE_ID;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const runFile = promisify(execFile);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -32,10 +33,13 @@ export function validateDataFreeExecutable(bytes) {
 
 export function parseBuildArguments(args) {
   if (args.length === 1 && args[0] === "--help") return { help: true };
-  if (args.length !== 2 || args[0] !== "--output") {
-    throw new Error("Use --output with an explicit absolute path to a new iCloud MCP Contacts.app bundle.");
+  if (![2, 4].includes(args.length) || args[0] !== "--output" ||
+      (args.length === 4 && args[2] !== "--signing-identity")) {
+    throw new Error("Use --output with an explicit absolute path to a new iCloud MCP Contacts.app bundle, optionally followed by --signing-identity and an exact certificate SHA-1 fingerprint.");
   }
-  return { output: args[1] };
+  return args.length === 4
+    ? { output: args[1], signingIdentity: normalizeSigningIdentity(args[3]) }
+    : { output: args[1] };
 }
 
 // Canonical spelling deliberately refuses symlink parents, including macOS's
@@ -56,9 +60,8 @@ export async function validateOutputPath(output, { root = packageRoot, uid = pro
   });
   if (resolvedParent !== parent) throw new Error("Symlink parents are refused; use the staging parent's canonical real path.");
   if (inside(resolvedRoot, output)) throw new Error("Stage the bundle outside the public source checkout.");
-  const anchors = [...new Set(await Promise.all([
-    realpath(dirname(resolvedRoot)), realpath(tmpdir()), realpath("/tmp"),
-  ]))];
+  const temporaryRoots = [...new Set(await Promise.all([realpath(tmpdir()), realpath("/tmp")]))];
+  const anchors = [...new Set([await realpath(dirname(resolvedRoot)), ...temporaryRoots])];
   const anchor = anchors.filter((path) => inside(path, parent)).sort((a, b) => b.length - a.length)[0];
   if (!anchor) throw new Error("Output must be staged in this checkout's workspace parent or a local temporary directory.");
   let current = parse(parent).root;
@@ -66,11 +69,12 @@ export async function validateOutputPath(output, { root = packageRoot, uid = pro
     current = join(current, part);
     const info = await lstat(current);
     if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("Symlink or non-directory parents are refused.");
-    // System temporary roots can be sticky/public; descendants must be owned
-    // by this user or root and cannot be writable by another user or group.
-    if (inside(anchor, current) && current !== anchor &&
-        ((info.uid !== uid && info.uid !== 0) || publicWritable(info))) {
-      throw new Error("Staging descendants must be owner-controlled and not publicly writable.");
+    // Protect every path component, including the selected anchor and its
+    // ancestors. A private child can still be exchanged via a writable parent.
+    // Only canonical, root-owned sticky temporary roots may be shared-writable.
+    const safeSharedTemporaryRoot = temporaryRoots.includes(current) && info.uid === 0 && (info.mode & 0o1000) !== 0;
+    if ((info.uid !== uid && info.uid !== 0) || (publicWritable(info) && !safeSharedTemporaryRoot)) {
+      throw new Error("Staging ancestors must be owner-controlled and not publicly writable; only root-owned sticky temporary roots are excepted.");
     }
   }
   const parentInfo = await lstat(parent);
@@ -108,8 +112,10 @@ async function checkedCommand(command, args) {
   }
 }
 
-export async function buildContactsCompanion({ output, root = packageRoot } = {}) {
-  if (process.platform !== "darwin") throw new Error("The Contacts companion can only be staged on macOS.");
+export async function buildContactsCompanion({ output, root = packageRoot, signingIdentity,
+  commandImpl = checkedCommand, platform = process.platform } = {}) {
+  if (platform !== "darwin") throw new Error("The Contacts companion can only be staged on macOS.");
+  const signing = companionSigningPlan(output, signingIdentity);
   const destination = await validateOutputPath(output, { root });
   const [binary, info, license] = await Promise.all([
     reviewedFile(join(destination.resolvedRoot, "swift", ".build", "release", "contacts-cli"), destination.resolvedRoot, { executable: true }),
@@ -119,17 +125,23 @@ export async function buildContactsCompanion({ output, root = packageRoot } = {}
   if (!license.bytes.toString("utf8").includes("Copyright (c) 2025 Omar Shahine")) {
     throw new Error("The upstream MIT copyright notice must be preserved.");
   }
-  await checkedCommand("/usr/bin/plutil", ["-lint", info.path]);
-  const converted = await checkedCommand("/usr/bin/plutil", ["-convert", "json", "-o", "-", info.path]);
+  await commandImpl("/usr/bin/plutil", ["-lint", info.path]);
+  const converted = await commandImpl("/usr/bin/plutil", ["-convert", "json", "-o", "-", info.path]);
   const manifest = JSON.parse(converted.stdout);
   if (manifest.CFBundleIdentifier !== BUNDLE_ID || manifest.CFBundleExecutable !== "contacts-cli" ||
       manifest.CFBundlePackageType !== "APPL" || !manifest.NSContactsUsageDescription ||
       Object.keys(manifest).some((key) => key.startsWith("NS") && key !== "NSContactsUsageDescription")) {
     throw new Error("The reviewed Contacts-only companion identity and privacy description are required.");
   }
-  const architecture = (await checkedCommand("/usr/bin/file", ["-b", binary.path])).stdout.trim();
+  const architecture = (await commandImpl("/usr/bin/file", ["-b", binary.path])).stdout.trim();
   if (!architecture.startsWith("Mach-O") || !architecture.includes("executable") || !/\b(arm64|x86_64)\b/u.test(architecture)) {
     throw new Error("The staged executable must be a native macOS arm64 or x86_64 Mach-O binary.");
+  }
+  if (signing.certificateSHA1) {
+    const identities = await commandImpl("/usr/bin/security", ["find-identity", "-v", "-p", "codesigning"]);
+    if (!signingIdentityAvailable(identities.stdout, signing.certificateSHA1)) {
+      throw new Error("The exact selected signing certificate is unavailable. No ad-hoc fallback, certificate creation or Keychain change is performed.");
+    }
   }
   // Recheck immediately before exclusive creation. A private, owner-controlled
   // parent prevents other users from exchanging path components during staging.
@@ -155,7 +167,7 @@ export async function buildContactsCompanion({ output, root = packageRoot } = {}
   // Swift's linker debug symbols can retain local AST/build paths despite
   // disabled compiler debug information and prefix maps. Remove only those
   // symbols from the verified copy; never alter the original build executable.
-  await checkedCommand("/usr/bin/strip", ["-S", executable]);
+  await commandImpl("/usr/bin/strip", ["-S", executable]);
   const strippedBytes = await readFile(executable);
   validateDataFreeExecutable(strippedBytes);
   await writeFile(join(resources, "ATTRIBUTION.txt"),
@@ -163,38 +175,41 @@ export async function buildContactsCompanion({ output, root = packageRoot } = {}
     "Derived from Apple PIM: https://github.com/omarshahine/apple-pim\n" +
     "Copyright (c) 2025 Omar Shahine. MIT license included as LICENSE.\n" +
     "Connector: https://github.com/Elephruit/icloud-mcp-connector\n" +
-    "This is a staged, ad-hoc-signed native Contacts executable, not an installed service.\n" +
+    `This is a staged, ${signing.signing}-signed native Contacts executable, not an installed service.\n` +
     "Linker debug symbols are stripped from the staged executable to remove local build paths.\n" +
-    "It contains no personal configuration, contact data or job paths.\n" +
-    "Ad-hoc signatures bind to executable content; later updates may need a new macOS grant.\n",
+    "Staging inputs are only the reviewed executable, Info.plist and MIT attribution; private configuration, contact records and job files are excluded.\n" +
+    "The executable scan rejects recognized home/build/cache path patterns; it is not a general personal-data detector.\n" +
+    `${signing.updateGrant}\n` +
+    "Certificate mode is local staging, with no notarization or Developer ID distribution claim.\n",
     { mode: 0o600, flag: "wx" });
   await writeFile(join(resources, "BUILD.json"), JSON.stringify({
     bundleId: BUNDLE_ID, sourceSHA256: hash(binary.bytes), infoSHA256: hash(info.bytes),
     licenseSHA256: hash(license.bytes), strippedSHA256: hash(strippedBytes),
-    debugSymbols: "stripped", signing: "ad-hoc", installed: false,
+    debugSymbols: "stripped", signing: signing.signing,
+    ...(signing.certificateSHA1 ? { certificateSHA1: signing.certificateSHA1, designatedRequirement: signing.designatedRequirement } : {}),
+    installed: false, notarized: false, permissionAcceptance: "not-tested",
   }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-  await checkedCommand("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", output]);
-  await checkedCommand("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", output]);
-  const entitlements = (await checkedCommand("/usr/bin/codesign", ["--display", "--entitlements", "-", "--xml", output])).stdout.trim();
+  await commandImpl("/usr/bin/codesign", signing.signArguments);
+  await commandImpl("/usr/bin/codesign", signing.verifyArguments);
+  const entitlements = (await commandImpl("/usr/bin/codesign", ["--display", "--entitlements", "-", "--xml", output])).stdout.trim();
   if (entitlements && (!/<dict\s*\/>|<dict>\s*<\/dict>/u.test(entitlements) || /<key>/u.test(entitlements))) {
     throw new Error("The staged Contacts companion must not carry entitlements.");
   }
-  const signature = (await checkedCommand("/usr/bin/codesign", ["--display", "--verbose=4", output])).stderr;
-  const identifier = signature.match(/^Identifier=(.+)$/mu)?.[1];
-  const codeDirectoryHash = signature.match(/^CDHash=([a-f0-9]+)$/mu)?.[1];
-  if (identifier !== BUNDLE_ID || !/^Signature=adhoc$/mu.test(signature) || !codeDirectoryHash) {
-    throw new Error("The staged companion's ad-hoc signature identity could not be verified.");
-  }
+  const signature = (await commandImpl("/usr/bin/codesign", ["--display", "--verbose=4", output])).stderr;
+  const requirement = signing.certificateSHA1
+    ? (await commandImpl("/usr/bin/codesign", ["--display", "--requirements", "-", output])).stdout : "";
+  const { identifier, codeDirectoryHash } = validateSignatureDescription(signature, requirement, signing);
   const signedBytes = await readFile(executable);
   validateDataFreeExecutable(signedBytes);
   return {
-    bundleName: APP_NAME, bundleId: identifier, signing: "ad-hoc", codeDirectoryHash,
+    bundleName: APP_NAME, bundleId: identifier, signing: signing.signing, codeDirectoryHash,
+    ...(signing.certificateSHA1 ? { certificateSHA1: signing.certificateSHA1, designatedRequirement: signing.designatedRequirement } : {}),
     sourceSHA256: hash(binary.bytes), strippedSHA256: hash(strippedBytes),
     signedExecutableSHA256: hash(signedBytes), debugSymbols: "stripped",
     architectures: [...new Set(architecture.match(/\b(arm64|x86_64)\b/gu))],
     minimumMacOS: manifest.LSMinimumSystemVersion,
-    installed: false, launched: false, requestedPermissions: false,
-    updateGrant: "Ad-hoc signed updates may require a new macOS Contacts grant.",
+    installed: false, launched: false, requestedPermissions: false, notarized: false,
+    permissionAcceptance: "not-tested", updateGrant: signing.updateGrant,
   };
 }
 
@@ -202,6 +217,8 @@ export async function main(args = process.argv.slice(2)) {
   const parsed = parseBuildArguments(args);
   if (parsed.help) {
     console.log("Stage only: node scripts/build-contacts-companion.mjs --output /canonical/private/staging/iCloud\\ MCP\\ Contacts.app\n" +
+      "Optionally append --signing-identity with the exact SHA-1 fingerprint of an already approved certificate; omission uses ad-hoc signing.\n" +
+      "Certificate mode keeps a fixed bundle/certificate requirement for local builds, requires separate approval to use the signing key, and makes no notarization or permission-continuity claim.\n" +
       "Create a private 0700 parent outside the source checkout first. This does not install, launch, register or request Contacts access.");
     return;
   }

@@ -48,6 +48,22 @@ cannot supply them. Stage a self-contained directory named `icloud-mcp-connector
 - `examples/scoped-config.example.json` and the setup, Contacts companion, Notes, Mail and transport docs
   referenced by the skill under `docs/`.
 
+Before copying native executables into a distributable package, use the reviewed
+staging helper with a new canonical private parent outside Git:
+
+```sh
+node scripts/stage-native-tools.mjs --output '/absolute/private/staging/native-tools'
+```
+
+It copies only the five fixed release executables, strips debug symbols from the
+copies, rejects known private build/cache paths before and after signing, and
+verifies their ad-hoc signatures. Use the resulting copies and retain their
+`LICENSE`, `ATTRIBUTION.txt` and `BUILD.json` alongside the staged package.
+Source binaries, installed caches and private configuration are not changed.
+Known-path scanning is not a general detector of personal content. Ad-hoc
+updates can change permission attribution and require separate installed-host
+acceptance; staging does not establish grant continuity or notarization.
+
 The optional Contacts companion is a separate native bundle; it is not copied
 into the plugin cache or installed by the launcher. Its reviewed build and
 explicit private transport selection are described in

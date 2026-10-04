@@ -1,6 +1,6 @@
 # Assistant transport and connection proof
 
-Reviewed against official OpenAI documentation on 2026-10-03. This is a
+Reviewed against official OpenAI documentation on 2026-10-04. This is a
 configuration and acceptance guide; verify each connection on its actual host.
 No MCP registration, tunnel, credential,
 network listener, persistent service, or macOS permission grant is created by
@@ -86,11 +86,36 @@ not support public plugin distribution. The fetched documentation does not
 establish a price, so do not call this route free.
 [Secure MCP Tunnel documentation](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
+Personal Platform organizations are explicitly supported in that guide. The
+target account's permissions, workspace association, developer-mode access and
+dot tool availability still need verification. Creating/editing a tunnel needs
+organization-level Read + Manage; running/selecting it needs Read + Use.
+
+The official client recommends Homebrew on macOS. Review the current official
+formula before an approved installation; it includes a `cloudflared` companion,
+which this stdio experiment does not run. Direct release archives are not
+currently notarized. Do not bypass Gatekeeper with `xattr`, `spctl` or Open Anyway.
+[Official macOS client instructions](https://github.com/openai/tunnel-client#install-with-homebrew)
+
+The client has a local health/admin listener in addition to outbound HTTPS.
+For the first approved foreground experiment, explicitly bind it to
+`127.0.0.1:0` (an available loopback port), retain logs privately and stop the
+process after testing. No public listener, Cloudflare route, LaunchAgent or
+managed background runtime is needed. Run only one client per stdio tunnel ID;
+stop it before replacement and reinitialize the MCP child after a restart.
+[Client configuration and stdio limits](https://github.com/openai/tunnel-client/blob/master/docs/configuration.md)
+
 Before trying it, obtain approval for the runtime client, credential creation or
 use, remote tool/data processing, connection registration, and its lifetime.
 Begin with a manually started process and synthetic fixtures. Installing a
 LaunchAgent or another persistent service is a separate decision. Do not put a
 key, tunnel identity, user-specific allowlists, or private profile in Git.
+
+Use the isolated [connection proof server](connection-proof.md) first. It has
+no PIM imports, private configuration or native commands, and exposes only a
+synthetic nonce echo. Do not point the tunnel at the personal-data server during
+this experiment. A successful local source or relocated-bundle test is protocol
+evidence only; the actual target dot must discover and invoke the fixture.
 
 ChatGPT's connection guide explicitly provides a Tunnel option, discovery of the
 server's tools, and checks for workspace association and client health. Verify

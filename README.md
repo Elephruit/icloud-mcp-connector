@@ -17,6 +17,13 @@ and a Codex plugin package targeted at making these tools useful to dots.
 Direct dot connectivity remains in development: a supported, approved Mac-side
 execution route is required.
 
+The [staged product roadmap](docs/product-roadmap.md) prioritizes a verified
+assistant route and stable local app identity before new personal-data access.
+An isolated [synthetic connection probe](docs/connection-proof.md) supports
+that first proof. The separate [Mail send foundation](docs/mail-send-foundation.md)
+and [iMessage preview](docs/imessage-preview.md) are source-only; native sending
+and installed MCP exposure remain disabled.
+
 ## Current boundaries
 
 - MCP runs over local stdio only. Cloning, building, or passing stdio tests does

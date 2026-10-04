@@ -24,11 +24,26 @@ node scripts/build-contacts-companion.mjs --output '/absolute/private/staging/iC
 The builder refuses existing destinations and installation directories. It
 copies the native executable, usage-description plist, MIT license and upstream
 attribution, strips debug symbols from the copied executable, rejects embedded
-private build paths, applies an ad-hoc signature and verifies the bundle without
+private build paths, applies the selected signature and verifies the bundle without
 launching it. Keep the emitted executable SHA-256 for the private bridge
 configuration. This is a build artifact, not an installation or permission
 grant. Ad-hoc updates can change macOS permission attribution; review and test
 the new bundle before replacing an approved installation.
+
+Ad-hoc signing is the default for synthetic staging. For separately approved
+local signing, append `--signing-identity` and the exact 40-digit SHA-1 fingerprint
+of an already available code-signing certificate. Names and ambiguous selection
+are refused. The builder requires that exact identity before creating a bundle;
+it never creates a certificate or falls back to ad-hoc signing.
+
+Certificate mode pins the designated requirement to the fixed bundle ID and
+exact certificate leaf, then evaluates that requirement against the actual
+signature with `codesign --verify -R`. This provides a content-independent local
+identity for repeat builds with the same valid certificate. Certificate
+replacement or expiry requires review; macOS TCC grant continuity remains a
+live acceptance test. An Apple Development identity does not establish Developer
+ID distribution or notarization. No new Keychain trust or privacy grant is part
+of the builder.
 
 ## Separately approved host setup
 
