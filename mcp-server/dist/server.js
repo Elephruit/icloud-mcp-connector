@@ -411,11 +411,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -432,10 +432,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -496,8 +496,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -526,12 +526,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -584,12 +584,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -612,10 +612,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -651,10 +651,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -696,11 +696,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3, _b;
-        super.optimizeNames(names, constants2);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -1001,7 +1001,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1016,14 +1016,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -2795,11 +2795,11 @@ var require_validate = __commonJS({
         jsonPointer = $data;
         data = names_1.default.rootData;
       } else {
-        const matches = RELATIVE_JSON_POINTER.exec($data);
-        if (!matches)
+        const matches2 = RELATIVE_JSON_POINTER.exec($data);
+        if (!matches2)
           throw new Error(`Invalid JSON-pointer: ${$data}`);
-        const up = +matches[1];
-        jsonPointer = matches[2];
+        const up = +matches2[1];
+        jsonPointer = matches2[2];
         if (jsonPointer === "#") {
           if (up >= dataLevel)
             throw new Error(errorMsg("property/index", up));
@@ -3686,11 +3686,11 @@ var require_schemes = __commonJS({
         urnComponent.error = "URN can not be parsed";
         return urnComponent;
       }
-      const matches = urnComponent.path.match(URN_REG);
-      if (matches && matches[0] === urnComponent.path) {
+      const matches2 = urnComponent.path.match(URN_REG);
+      if (matches2 && matches2[0] === urnComponent.path) {
         const scheme = options.scheme || urnComponent.scheme || "urn";
-        urnComponent.nid = matches[1].toLowerCase();
-        urnComponent.nss = matches[2];
+        urnComponent.nid = matches2[1].toLowerCase();
+        urnComponent.nss = matches2[2];
         const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`;
         const schemeHandler = getSchemeHandler(urnScheme);
         urnComponent.path = void 0;
@@ -3875,49 +3875,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative2, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        relative2 = parse3(serialize(relative2, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3925,7 +3925,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
     function equal(uriA, uriB, options) {
@@ -4004,8 +4004,8 @@ var require_fast_uri = __commonJS({
     var URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u;
     var AUTHORITY_PREFIX = /^(?:[^#/:?]+:)?\/\/([^/?#]*)/;
     var AUTHORITY_INTRODUCER_REGION = /^(?:[^#/:?]+:)?([/\\\t\n\r]*)/;
-    function getParseError(parsed, matches) {
-      if (matches[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
+    function getParseError(parsed, matches2) {
+      if (matches2[2] !== void 0 && parsed.path && parsed.path[0] !== "/") {
         return 'URI path must start with "/" when authority is present.';
       }
       if (typeof parsed.port === "number" && (parsed.port < 0 || parsed.port > 65535)) {
@@ -4027,9 +4027,9 @@ var require_fast_uri = __commonJS({
     function isIPLiteral(host) {
       return host[0] === "[" && host[host.length - 1] === "]";
     }
-    function hasMalformedComponentPercentEncoding(matches) {
-      const host = matches[4];
-      return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
+    function hasMalformedComponentPercentEncoding(matches2) {
+      const host = matches2[4];
+      return hasMalformedPercentEncoding(matches2[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches2[6]) || hasMalformedPercentEncoding(matches2[7]) || hasMalformedPercentEncoding(matches2[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
@@ -4086,15 +4086,15 @@ var require_fast_uri = __commonJS({
           }
         }
       }
-      const matches = uri.match(URI_PARSE);
-      if (matches) {
-        parsed.scheme = matches[1];
-        parsed.userinfo = matches[3];
-        parsed.host = matches[4];
-        parsed.port = parseInt(matches[5], 10);
-        parsed.path = matches[6] || "";
-        parsed.query = matches[7];
-        parsed.fragment = matches[8];
+      const matches2 = uri.match(URI_PARSE);
+      if (matches2) {
+        parsed.scheme = matches2[1];
+        parsed.userinfo = matches2[3];
+        parsed.host = matches2[4];
+        parsed.port = parseInt(matches2[5], 10);
+        parsed.path = matches2[6] || "";
+        parsed.query = matches2[7];
+        parsed.fragment = matches2[8];
         if (parsed.scheme !== void 0) {
           const decodedScheme = unescape(parsed.scheme);
           if (VALID_SCHEME.test(decodedScheme)) {
@@ -4104,14 +4104,14 @@ var require_fast_uri = __commonJS({
             malformedScheme = true;
           }
         }
-        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches);
+        malformedPercentEncoding = hasMalformedComponentPercentEncoding(matches2);
         if (malformedPercentEncoding) {
           parsed.error = parsed.error || "URI contains malformed percent-encoding.";
         }
         if (isNaN(parsed.port)) {
-          parsed.port = matches[5];
+          parsed.port = matches2[5];
         }
-        const parseError = getParseError(parsed, matches);
+        const parseError = getParseError(parsed, matches2);
         if (parseError !== void 0) {
           parsed.error = parsed.error || parseError;
           malformedAuthorityOrPort = true;
@@ -6961,12 +6961,12 @@ var require_formats = __commonJS({
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     function date3(str) {
-      const matches = DATE.exec(str);
-      if (!matches)
+      const matches2 = DATE.exec(str);
+      if (!matches2)
         return false;
-      const year = +matches[1];
-      const month = +matches[2];
-      const day = +matches[3];
+      const year = +matches2[1];
+      const month = +matches2[2];
+      const day = +matches2[3];
       return month >= 1 && month <= 12 && day >= 1 && day <= (month === 2 && isLeapYear(year) ? 29 : DAYS[month]);
     }
     function compareDate(d1, d2) {
@@ -6981,16 +6981,16 @@ var require_formats = __commonJS({
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
       return function time3(str) {
-        const matches = TIME.exec(str);
-        if (!matches)
+        const matches2 = TIME.exec(str);
+        if (!matches2)
           return false;
-        const hr = +matches[1];
-        const min = +matches[2];
-        const sec = +matches[3];
-        const tz = matches[4];
-        const tzSign = matches[5] === "-" ? -1 : 1;
-        const tzH = +(matches[6] || 0);
-        const tzM = +(matches[7] || 0);
+        const hr = +matches2[1];
+        const min = +matches2[2];
+        const sec = +matches2[3];
+        const tz = matches2[4];
+        const tzSign = matches2[5] === "-" ? -1 : 1;
+        const tzH = +(matches2[6] || 0);
+        const tzM = +(matches2[7] || 0);
         if (tzH > 23 || tzM > 59 || strictTimeZone && !tz)
           return false;
         if (hr <= 23 && min <= 59 && sec < 60)
@@ -9600,7 +9600,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     }
     return propValues;
   });
-  const isObject2 = isObject;
+  const isObject3 = isObject;
   const catchall = def.catchall;
   let value;
   const memo2 = globalConfig.memoizer;
@@ -9608,7 +9608,7 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input = payload.value;
-    if (!isObject2(input)) {
+    if (!isObject3(input)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -9744,7 +9744,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     return doc.compile();
   };
   let fastpass;
-  const isObject2 = isObject;
+  const isObject3 = isObject;
   const jit = !globalConfig.jitless;
   const allowsEval2 = allowsEval;
   const fastEnabled = jit && allowsEval2.value;
@@ -9753,7 +9753,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   inst._zod.parse = (payload, ctx) => {
     value ?? (value = _normalized.value);
     const input = payload.value;
-    if (!isObject2(input)) {
+    if (!isObject3(input)) {
       payload.issues.push({
         expected: "object",
         code: "invalid_type",
@@ -16948,7 +16948,7 @@ var StdioServerTransport = class {
 };
 
 // server.js
-import { basename, dirname, join as join5 } from "path";
+import { basename, dirname as dirname2, join as join8 } from "path";
 
 // package.json
 var package_default = {
@@ -17018,19 +17018,19 @@ function detectSuspiciousContent(text) {
   if (!text || typeof text !== "string") {
     return { suspicious: false, matches: [] };
   }
-  const matches = [];
+  const matches2 = [];
   for (const pattern of SUSPICIOUS_PATTERNS) {
     const match = text.match(pattern);
     if (match) {
-      matches.push({
+      matches2.push({
         pattern: pattern.source,
         matched: match[0]
       });
     }
   }
   return {
-    suspicious: matches.length > 0,
-    matches
+    suspicious: matches2.length > 0,
+    matches: matches2
   };
 }
 function markUntrustedText(text, fieldName, domain) {
@@ -17052,7 +17052,7 @@ var UNTRUSTED_FIELDS = {
   // Reminder fields
   reminder: ["title", "notes"],
   // Contact fields
-  contact: ["notes", "organization", "jobTitle"],
+  contact: ["firstName", "lastName", "givenName", "familyName", "middleName", "namePrefix", "nameSuffix", "nickname", "previousFamilyName", "phoneticGivenName", "phoneticMiddleName", "phoneticFamilyName", "phoneticOrganizationName", "notes", "organization", "jobTitle"],
   // Mail fields - highest risk since email is externally authored
   // `senderName` and `replyToName` are the display-name halves the CLI now returns
   // separately; they are as attacker-authored as the joined string they came from.
@@ -18511,20 +18511,98 @@ async function handleContact(args, runCLI2) {
 
 // ../lib/connector-policy.js
 import { readFileSync as readFileSync2 } from "node:fs";
-import { isAbsolute, join as join2 } from "node:path";
-function loadConnectorConfig(env = process.env, readFile2 = readFileSync2) {
+import { isAbsolute as isAbsolute2, join as join3 } from "node:path";
+
+// ../lib/scoped-mail-config.js
+import { createHash } from "node:crypto";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join as join2 } from "node:path";
+function exactText(value, label, maxLength = 2048) {
+  if (typeof value !== "string" || !value || value.length > maxLength || value.trim() !== value || /[\u0000-\u001f\u007f*]/u.test(value)) throw new Error(`Mail ${label} must be exact nonempty text without wildcards/control characters`);
+  return value;
+}
+function deriveMailMailboxId(accountId, path) {
+  exactText(accountId, "account ID");
+  if (!Array.isArray(path) || path.length < 1 || path.length > 8) throw new Error("Mail mailbox path requires 1 to 8 exact hierarchy segments");
+  path.forEach((segment) => exactText(segment, "mailbox path segment", 1024));
+  return "mailbox:sha256:" + createHash("sha256").update(JSON.stringify([accountId, path])).digest("hex");
+}
+function validateMailConfig(config2) {
+  const mail = config2?.mail;
+  if (!mail || typeof mail !== "object" || Array.isArray(mail) || mail.enabled !== true) throw new Error("Mail is disabled; explicit mail.enabled=true and account/mailbox scopes are required");
+  if (Object.keys(mail).some((key) => !["enabled", "accounts", "mailboxes", "allowWrites"].includes(key))) throw new Error("Mail configuration has unsupported fields");
+  if (mail.allowWrites !== void 0 && mail.allowWrites !== false) throw new Error("Scoped Mail is read-only; allowWrites must be false");
+  if (!Array.isArray(mail.accounts) || mail.accounts.length < 1 || mail.accounts.length > 8) throw new Error("Mail requires 1 to 8 explicit native account IDs");
+  mail.accounts.forEach((accountId) => exactText(accountId, "account ID"));
+  if (new Set(mail.accounts).size !== mail.accounts.length) throw new Error("Mail account IDs must be unique");
+  if (!Array.isArray(mail.mailboxes) || mail.mailboxes.length < 1 || mail.mailboxes.length > 16) throw new Error("Mail requires 1 to 16 explicit account/path mailbox records");
+  const mailboxes = mail.mailboxes.map((record2) => {
+    if (!record2 || typeof record2 !== "object" || Array.isArray(record2) || Object.keys(record2).some((key) => !["id", "accountId", "path"].includes(key))) throw new Error("Mail mailbox record must contain only id, accountId, and path");
+    if (!mail.accounts.includes(record2.accountId)) throw new Error("Mail mailbox account is outside the explicit account allowlist");
+    if (record2.id !== deriveMailMailboxId(record2.accountId, record2.path)) throw new Error("Mail mailbox key does not match its exact account/path");
+    return Object.freeze({ id: record2.id, accountId: record2.accountId, path: Object.freeze([...record2.path]) });
+  });
+  if (new Set(mailboxes.map((record2) => record2.id)).size !== mailboxes.length) throw new Error("Mail mailbox keys must be unique");
+  return Object.freeze({ enabled: true, allowWrites: false, accounts: Object.freeze([...mail.accounts]), mailboxes: Object.freeze(mailboxes) });
+}
+async function loadMailConfig(env = process.env, {
+  readFileImpl = readFile,
+  lstatImpl = lstat,
+  realpathImpl = realpath,
+  getUid = () => process.getuid?.()
+} = {}) {
+  if (env.APPLE_PIM_PROFILE) throw new Error("Mail profiles are unsupported; no fallback is permitted");
+  const directory = env.APPLE_PIM_CONFIG_DIR;
+  if (typeof directory !== "string" || !isAbsolute(directory) || /[\u0000-\u001f\u007f]/u.test(directory)) throw new Error("Mail requires an explicit absolute private APPLE_PIM_CONFIG_DIR");
+  let raw;
+  try {
+    const privateDirectory = await realpathImpl(directory);
+    const directoryInfo = await lstatImpl(privateDirectory);
+    const configPath = join2(privateDirectory, "config.json");
+    const fileInfo = await lstatImpl(configPath);
+    const uid = getUid();
+    if (!Number.isInteger(uid) || !directoryInfo.isDirectory() || !fileInfo.isFile() || fileInfo.nlink !== 1 || directoryInfo.uid !== uid || fileInfo.uid !== uid || (directoryInfo.mode & 63) !== 0 || (fileInfo.mode & 63) !== 0 || fileInfo.size > 65536) throw new Error("private config permissions");
+    let ancestor = privateDirectory;
+    for (; ; ) {
+      let gitEntry;
+      try {
+        gitEntry = await lstatImpl(join2(ancestor, ".git"));
+      } catch (error2) {
+        if (error2.code !== "ENOENT") throw error2;
+      }
+      if (gitEntry) throw new Error("config inside Git");
+      const parent = dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+    raw = await readFileImpl(configPath, "utf8");
+  } catch {
+    throw new Error("Mail config must be an owner-only file in an owner-only private directory outside Git; access remains disabled");
+  }
+  if (typeof raw !== "string" || Buffer.byteLength(raw, "utf8") > 65536) throw new Error("Mail configuration exceeds its size limit");
+  let config2;
+  try {
+    config2 = JSON.parse(raw);
+  } catch {
+    throw new Error("Mail configuration is malformed; access remains disabled");
+  }
+  return validateMailConfig(config2);
+}
+
+// ../lib/connector-policy.js
+function loadConnectorConfig(env = process.env, readFile3 = readFileSync2) {
   const dir = env.APPLE_PIM_CONFIG_DIR;
-  if (!dir || !isAbsolute(dir)) {
+  if (!dir || !isAbsolute2(dir)) {
     throw new Error("Set APPLE_PIM_CONFIG_DIR to an absolute private configuration directory; access is denied.");
   }
   let config2;
   try {
-    config2 = JSON.parse(readFile2(join2(dir, "config.json"), "utf8"));
+    config2 = JSON.parse(readFile3(join3(dir, "config.json"), "utf8"));
     if (!config2 || typeof config2 !== "object" || Array.isArray(config2)) throw new Error("invalid object");
     const profile = env.APPLE_PIM_PROFILE;
     if (profile !== void 0) {
       if (!/^[A-Za-z0-9_-]+$/.test(profile)) throw new Error("invalid profile");
-      const override = JSON.parse(readFile2(join2(dir, "profiles", `${profile}.json`), "utf8"));
+      const override = JSON.parse(readFile3(join3(dir, "profiles", `${profile}.json`), "utf8"));
       if (!override || typeof override !== "object" || Array.isArray(override)) throw new Error("invalid profile object");
       config2 = { ...config2, ...override };
     }
@@ -18537,6 +18615,14 @@ var nonemptyIDs = (value) => Array.isArray(value) && value.length > 0 && value.e
 function requireConnectorScope(name, args, config2) {
   if (args.configDir !== void 0 || args.profile !== void 0) {
     throw new Error("Per-call configuration overrides are disabled; configure the host environment instead.");
+  }
+  if (name === "mail") {
+    const mail = validateMailConfig(config2);
+    if (!["list", "search", "get", "thread"].includes(args.action)) throw new Error("Scoped Mail is read-only.");
+    if (!mail.accounts.includes(args.accountId) || !mail.mailboxes.some((entry) => entry.id === args.mailboxId && entry.accountId === args.accountId)) {
+      throw new Error("Mail requires an exact allowed account and its enrolled mailbox path key.");
+    }
+    return;
   }
   const key = { calendar: "calendars", reminder: "reminders", contact: "contacts", notes: "notes" }[name];
   if (!key) throw new Error(`Unsupported scoped connector tool: ${name}`);
@@ -18560,6 +18646,406 @@ function requireConnectorScope(name, args, config2) {
   if (name === "notes" && ["create", "append"].includes(args.action) && scope.allowWrites !== true) {
     throw new Error("Notes writes require allowWrites=true in host configuration.");
   }
+}
+
+// ../lib/scoped-mail.js
+import { isAbsolute as isAbsolute3, join as join4 } from "node:path";
+
+// ../lib/scoped-mail-headers.js
+function parseMailThreadHeaders(rawHeaders) {
+  var result = { messageId: "", references: [], inReplyTo: [], malformed: false, truncated: false };
+  if (typeof rawHeaders !== "string") {
+    result.malformed = true;
+    return result;
+  }
+  if (rawHeaders.length > 8192) {
+    result.truncated = true;
+    result.malformed = true;
+    return result;
+  }
+  var unfolded = rawHeaders.replace(/\r?\n[ \t]+/g, " ");
+  var fields = {};
+  unfolded.split(/\r?\n/).forEach(function(line) {
+    var match = /^(message-id|references|in-reply-to):[ \t]*(.*)$/i.exec(line);
+    if (!match) return;
+    var name = match[1].toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(fields, name)) {
+      result.malformed = true;
+      return;
+    }
+    fields[name] = match[2];
+  });
+  function ids(value) {
+    if (value === void 0) return [];
+    var matches2 = [], expression = /<([^<>\s]{1,998})>/g, match;
+    while ((match = expression.exec(value)) !== null) matches2.push(match[1]);
+    if (matches2.length > 64 || !matches2.length || value.replace(/<[^<>\s]{1,998}>/g, "").trim()) {
+      result.malformed = true;
+      return [];
+    }
+    if (new Set(matches2).size !== matches2.length) {
+      result.malformed = true;
+      return [];
+    }
+    return matches2;
+  }
+  var ownIds = ids(fields["message-id"]);
+  if (ownIds.length === 1) result.messageId = ownIds[0];
+  else result.malformed = true;
+  result.references = ids(fields.references);
+  result.inReplyTo = ids(fields["in-reply-to"]);
+  return result;
+}
+function selectMailThread(messages, seedKey) {
+  const seed = messages.find((message) => message.key === seedKey);
+  if (!seed || seed.threadHeaders.malformed || seed.threadHeaders.truncated || !seed.threadHeaders.messageId) throw new Error("Mail thread seed lacks unambiguous bounded RFC headers");
+  const byRFC = /* @__PURE__ */ new Map();
+  const adjacency = /* @__PURE__ */ new Map();
+  const connect = (a, b) => {
+    if (!adjacency.has(a)) adjacency.set(a, /* @__PURE__ */ new Set());
+    if (!adjacency.has(b)) adjacency.set(b, /* @__PURE__ */ new Set());
+    adjacency.get(a).add(b);
+    adjacency.get(b).add(a);
+  };
+  for (const message of messages) {
+    const headers = message.threadHeaders;
+    if (headers.malformed || headers.truncated || !headers.messageId) continue;
+    if (byRFC.has(headers.messageId)) throw new Error("Mail thread relationships contain ambiguous duplicate RFC message IDs");
+    byRFC.set(headers.messageId, message);
+    connect(headers.messageId, headers.messageId);
+    for (const related of [...headers.references, ...headers.inReplyTo]) connect(headers.messageId, related);
+  }
+  const visited = /* @__PURE__ */ new Set([seed.threadHeaders.messageId]), pending = [seed.threadHeaders.messageId];
+  for (let index = 0; index < pending.length; index += 1) {
+    for (const neighbor of adjacency.get(pending[index]) ?? []) if (!visited.has(neighbor)) {
+      visited.add(neighbor);
+      pending.push(neighbor);
+    }
+  }
+  return messages.filter((message) => !message.threadHeaders.malformed && !message.threadHeaders.truncated && visited.has(message.threadHeaders.messageId));
+}
+
+// ../lib/scoped-mail-script.js
+var SCOPED_MAIL_JXA = String.raw`function run(argv) {
+  "use strict";
+  if (argv.length !== 1) throw new Error("Invalid scoped Mail invocation");
+  var p = JSON.parse(argv[0]);
+  if (["list", "search", "get", "snapshot"].indexOf(p.op) < 0) throw new Error("Mail action is read-only");
+  var Mail = Application("/System/Applications/Mail.app");
+  if (!Mail.running()) throw new Error("Mail must already be running");
+  var parseHeaders = ${parseMailThreadHeaders.toString()};
+  function resolveMailbox(record) {
+    var accounts = Mail.iCloudAccounts.whose({id:record.accountId})().filter(function(a) { return a.id() === record.accountId; });
+    if (accounts.length !== 1) throw new Error("Allowed Mail account is missing or ambiguous");
+    var parent = accounts[0];
+    for (var level = 0; level < record.path.length; level++) {
+      var segment = record.path[level];
+      var matches = parent.mailboxes.whose({name:segment})().filter(function(mb) { return mb.name() === segment; });
+      if (matches.length !== 1) throw new Error("Allowed Mail mailbox path is missing or ambiguous");
+      parent = matches[0];
+    }
+    return parent;
+  }
+  function locate(record, localId, expectedRFC) {
+    var mailbox = resolveMailbox(record);
+    var messages = mailbox.messages.whose({id:Number(localId)})().filter(function(m) { return String(m.id()) === localId; });
+    if (messages.length !== 1) throw new Error("Message is outside the allowed mailbox, missing, or ambiguous");
+    var message = messages[0];
+    if (expectedRFC !== undefined && String(message.messageId() || "").replace(/^<|>$/g, "") !== expectedRFC) throw new Error("Mail message identity changed");
+    return message;
+  }
+  function clip(value, cap) { var text = String(value || ""); return {value:text.slice(0,cap),truncated:text.length > cap}; }
+  function metadata(record, localId, skipOutOfWindow) {
+    var message = locate(record, localId);
+    var received = message.dateReceived();
+    if (!(received instanceof Date) || !isFinite(received.getTime())) throw new Error("Mail message received date is invalid");
+    if (received.getTime() < p.sinceEpoch || received.getTime() > p.untilEpoch) {
+      if (skipOutOfWindow === true) return null;
+      throw new Error("Mail message is outside the bounded date window");
+    }
+    var subjectText = clip(message.subject(), 4096), senderText = clip(message.sender(), 4096);
+    var rfcId = String(message.messageId() || "").replace(/^<|>$/g, "");
+    if (rfcId.length > 998 || /[<>\s]/.test(rfcId)) rfcId = "";
+    return {id:localId,messageId:rfcId,accountId:record.accountId,mailboxId:record.id,subject:subjectText.value,sender:senderText.value,dateReceived:received.toISOString(),isRead:Boolean(message.readStatus()),metadataTruncated:subjectText.truncated || senderText.truncated};
+  }
+  function fullMessage(record, localId, expectedRFC) {
+    var data = metadata(record, localId);
+    if (expectedRFC !== undefined && data.messageId !== expectedRFC) throw new Error("Mail message identity changed");
+    var message = locate(record, localId, data.messageId);
+    var beforeRead = Boolean(message.readStatus());
+    var bodyText = clip(message.content(), 16384);
+    var afterRead = Boolean(message.readStatus());
+    if (beforeRead !== afterRead) throw new Error("Read-only Mail content access changed read status; stop and verify locally");
+    locate(record, localId, data.messageId);
+    data.content = bodyText.value; data.contentTruncated = bodyText.truncated;
+    data.isRead = afterRead; data.attachmentsOmitted = true;
+    return data;
+  }
+  var selected = p.mailboxes.filter(function(record) { return record.id === p.mailboxId && record.accountId === p.accountId; });
+  if (selected.length !== 1) throw new Error("Mail request lacks an exact allowed account/mailbox scope");
+  if (p.op === "get") return JSON.stringify({success:true,message:fullMessage(selected[0],p.id,p.expectedRFC)});
+  var records = p.op === "snapshot" ? p.mailboxes.filter(function(record) { return record.accountId === p.accountId; }) : selected;
+  var output = [], seen = {}, inspected = 0, eligibleCount = 0, scanTruncated = false;
+  if (p.op === "snapshot") {
+    var seed = metadata(selected[0],p.id);
+    var seedMessage = locate(selected[0],p.id,seed.messageId);
+    seed.threadHeaders = parseHeaders(String(seedMessage.allHeaders() || ""));
+    seed.key = seed.mailboxId + "/" + seed.id;
+    output.push(seed); seen[seed.key] = true; inspected = 1; eligibleCount = 1;
+  }
+  for (var boxIndex = 0; boxIndex < records.length; boxIndex++) {
+    var record = records[boxIndex], mailbox = resolveMailbox(record);
+    var candidates = mailbox.messages.whose({dateReceived:{">=":new Date(p.sinceEpoch)}})();
+    for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+      var localId = String(candidates[candidateIndex].id()), key = record.id + "/" + localId;
+      if (seen[key]) continue;
+      if (inspected >= 200) { scanTruncated = true; break; }
+      inspected++;
+      var data = metadata(record,localId,true);
+      seen[key] = true;
+      // New arrivals after the fixed request clock never reach metadata/body/header getters.
+      if (data === null) continue;
+      eligibleCount++;
+      if (p.op === "search" && (data.subject + "\n" + data.sender).toLowerCase().indexOf(p.query.toLowerCase()) < 0) continue;
+      if (p.op === "snapshot") {
+        data.threadHeaders = parseHeaders(String(locate(record,localId,data.messageId).allHeaders() || ""));
+        data.key = key;
+      }
+      output.push(data);
+    }
+  }
+  output.sort(function(a,b) { return Date.parse(b.dateReceived) - Date.parse(a.dateReceived) || (a.id < b.id ? -1 : 1); });
+  var resultLimited = p.op !== "snapshot" && output.length > p.limit;
+  if (p.op !== "snapshot") output = output.slice(0,p.limit);
+  return JSON.stringify({success:true,messages:output,coverage:{since:p.since,until:p.until,inspected:inspected,eligibleCount:eligibleCount,scanTruncated:scanTruncated,resultLimited:resultLimited,ordering:"newest among inspected candidates",historicalConversationComplete:false}});
+}
+`;
+
+// ../lib/scoped-mail.js
+import { userInfo } from "node:os";
+import { performance } from "node:perf_hooks";
+var mailTool = {
+  name: "mail",
+  description: "Read-only scoped local iCloud Mail. Actions list/search/get/thread. Exact native account ID and host-derived mailbox path key required. No send, mark-read, delete, attachments, or discovery. Thread uses bounded RFC header relationships, never guarantees complete historical conversations.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["list", "search", "get", "thread", "schema"] },
+      accountId: { type: "string", description: "Exact allowed native Mail account ID." },
+      mailboxId: { type: "string", description: "Enrolled SHA256 account/path key; Mail exposes no native mailbox ID." },
+      id: { type: "string", pattern: "^[1-9][0-9]*$", description: "Local numeric message ID for get/thread; never used outside the selected mailbox." },
+      query: { type: "string", minLength: 1, maxLength: 2048, description: "Search subject/sender metadata only." },
+      since: { type: "string", format: "date-time", description: "UTC lower date bound; defaults to seven days ago, maximum 31 days." },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "Result limit, default 20. Maximum 200 inspected header candidates." }
+    },
+    required: ["action"],
+    additionalProperties: false
+  }
+};
+function mailChildEnvironment() {
+  const environment = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "en_US.UTF-8" };
+  const home = userInfo().homedir;
+  if (typeof home === "string" && isAbsolute3(home)) environment.HOME = home;
+  return environment;
+}
+function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, failure: failure2, signal }) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(failure2 + "; operation aborted before launch"));
+      return;
+    }
+    let child;
+    try {
+      child = spawnImpl(command, argv, { shell: false, stdio: [input === void 0 ? "ignore" : "pipe", "pipe", "pipe"], env: mailChildEnvironment() });
+    } catch {
+      reject(new Error(failure2 + "; executable unavailable"));
+      return;
+    }
+    let output = "", size = 0, stderrSize = 0, settled = false, killTimer;
+    const fail = (message, kill = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (kill) {
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 1e3);
+        killTimer.unref?.();
+      }
+      reject(new Error(message));
+    };
+    const abort = () => fail(failure2 + "; operation deadline aborted the process", true);
+    const timer = setTimeout(() => fail(failure2 + "; timed out", true), timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (settled) return;
+      size += Buffer.byteLength(chunk, "utf8");
+      if (size > outputLimit) {
+        fail(failure2 + "; output exceeded its limit", true);
+        return;
+      }
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      if (settled) return;
+      stderrSize += Buffer.byteLength(chunk);
+      if (stderrSize > 16384) fail(failure2 + "; diagnostics exceeded their limit", true);
+    });
+    child.on("error", () => fail(failure2 + "; executable unavailable"));
+    if (input !== void 0) child.stdin.on("error", () => fail(failure2 + "; script input failed", true));
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      signal?.removeEventListener("abort", abort);
+      if (settled) return;
+      if (code !== 0) {
+        fail(failure2);
+        return;
+      }
+      try {
+        const value = JSON.parse(output);
+        settled = true;
+        resolve(value);
+      } catch {
+        fail(failure2 + "; invalid JSON response");
+      }
+    });
+    if (input !== void 0) {
+      try {
+        child.stdin.end(input);
+      } catch {
+        fail(failure2 + "; script input failed", true);
+      }
+    }
+  });
+}
+async function checkMailAccess({ accessCliPath, spawnImpl = spawnProcess, platform = process.platform, timeoutMs = 2e3, signal } = {}) {
+  if (platform !== "darwin") throw new Error("Scoped Mail requires macOS");
+  if (typeof accessCliPath !== "string" || !isAbsolute3(accessCliPath)) throw new Error("Mail permission preflight requires the fixed checkout mail-access-cli path");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5e3) throw new Error("Mail preflight timeout is invalid");
+  const status = await processJSON(accessCliPath, ["status"], { spawnImpl, timeoutMs, signal, outputLimit: 4096, failure: "Mail permission preflight failed; no Mail command was sent" });
+  if (!status || status.success !== true || status.target !== "com.apple.mail" || status.running !== true || status.authorized !== true || status.prompted !== false || status.authorization !== "authorized") throw new Error("Mail must already be running with an existing Automation grant; no prompt or Mail data command was sent");
+  return status;
+}
+async function runScopedMailScript(payload, { accessCliPath, preflightImpl = checkMailAccess, spawnImpl = spawnProcess, platform = process.platform, timeoutMs = 2e4, signal } = {}) {
+  if (platform !== "darwin") throw new Error("Scoped Mail requires macOS");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3e4) throw new Error("Mail timeout is invalid");
+  const started = performance.now();
+  await preflightImpl({ accessCliPath, spawnImpl, platform, signal, timeoutMs: Math.min(2e3, timeoutMs) });
+  const remaining = Math.floor(timeoutMs - (performance.now() - started));
+  if (remaining < 1 || signal?.aborted) throw new Error("Mail operation deadline expired after preflight; no data command was sent");
+  return processJSON("/usr/bin/osascript", ["-l", "JavaScript", "-", JSON.stringify(payload)], { spawnImpl, input: SCOPED_MAIL_JXA, timeoutMs: remaining, signal, outputLimit: 1024 * 1024, failure: "Scoped read-only Mail command failed; verify enrolled scope and supported message state locally" });
+}
+function buildMailInvocation(args, config2, now = /* @__PURE__ */ new Date()) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Mail arguments must be an object");
+  const fields = {
+    list: ["action", "accountId", "mailboxId", "since", "limit"],
+    search: ["action", "accountId", "mailboxId", "since", "limit", "query"],
+    get: ["action", "accountId", "mailboxId", "since", "id"],
+    thread: ["action", "accountId", "mailboxId", "since", "limit", "id"]
+  }[args.action];
+  if (!fields || Object.keys(args).some((key) => !fields.includes(key))) throw new Error("Mail action/parameters are unsupported; this interface is strictly read-only and host-scoped");
+  if (!config2.accounts.includes(args.accountId)) throw new Error("Mail requires an exact allowed accountId");
+  const record2 = config2.mailboxes.find((entry) => entry.id === args.mailboxId && entry.accountId === args.accountId);
+  if (!record2) throw new Error("Mail requires an exact allowed mailboxId bound to the requested account");
+  const untilEpoch = now.getTime();
+  if (!Number.isFinite(untilEpoch)) throw new Error("Mail host clock is invalid");
+  let sinceEpoch = untilEpoch - 7 * 864e5;
+  if (args.since !== void 0) {
+    if (typeof args.since !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(args.since)) throw new Error("Mail since must be a valid UTC ISO timestamp");
+    sinceEpoch = Date.parse(args.since);
+    if (!Number.isFinite(sinceEpoch) || new Date(sinceEpoch).toISOString().replace(/\.000Z$/u, "Z") !== args.since.replace(/\.000Z$/u, "Z")) throw new Error("Mail since timestamp is invalid");
+  }
+  if (sinceEpoch < untilEpoch - 31 * 864e5 || sinceEpoch > untilEpoch) throw new Error("Mail date window must be within the last 31 days");
+  const limit = args.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("Mail limit must be an integer from 1 to 50");
+  if (args.action === "search" && (typeof args.query !== "string" || !args.query.trim() || args.query.length > 2048 || /[\u0000]/u.test(args.query))) throw new Error("Mail query must be nonempty bounded text");
+  if (["get", "thread"].includes(args.action) && (typeof args.id !== "string" || !/^[1-9]\d*$/u.test(args.id) || !Number.isSafeInteger(Number(args.id)))) throw new Error("Mail id must be an exact positive local numeric message ID string");
+  return { op: args.action === "thread" ? "snapshot" : args.action, accountId: args.accountId, mailboxId: args.mailboxId, ...args.id ? { id: args.id } : {}, ...args.query ? { query: args.query } : {}, limit, sinceEpoch, untilEpoch, since: new Date(sinceEpoch).toISOString(), until: now.toISOString(), mailboxes: config2.mailboxes.filter((entry) => entry.accountId === args.accountId).map((entry) => ({ id: entry.id, accountId: entry.accountId, path: [...entry.path] })) };
+}
+function safeMessage(message, invocation, { body = false, snapshot = false, anyAllowedMailbox = false } = {}) {
+  const record2 = invocation.mailboxes.find((entry) => entry.id === message?.mailboxId && entry.accountId === message?.accountId);
+  const received = Date.parse(message?.dateReceived);
+  if (!record2 || message.accountId !== invocation.accountId || !anyAllowedMailbox && message.mailboxId !== invocation.mailboxId || typeof message.id !== "string" || !/^[1-9]\d*$/u.test(message.id) || !Number.isSafeInteger(Number(message.id)) || typeof message.messageId !== "string" || message.messageId.length > 998 || /[<>\s]/u.test(message.messageId) || typeof message.subject !== "string" || message.subject.length > 4096 || typeof message.sender !== "string" || message.sender.length > 4096 || !Number.isFinite(received) || received < invocation.sinceEpoch || received > invocation.untilEpoch || typeof message.isRead !== "boolean" || typeof message.metadataTruncated !== "boolean") throw new Error("Mail response is invalid, out of scope, or outside the bounded date window");
+  const output = { id: message.id, messageId: message.messageId, accountId: message.accountId, mailboxId: message.mailboxId, subject: message.subject, sender: message.sender, dateReceived: message.dateReceived, isRead: message.isRead, metadataTruncated: message.metadataTruncated };
+  if (body) {
+    if (typeof message.content !== "string" || message.content.length > 16384 || typeof message.contentTruncated !== "boolean" || message.attachmentsOmitted !== true) throw new Error("Mail content response is invalid or exceeds its limit");
+    output.content = message.content;
+    output.contentTruncated = message.contentTruncated;
+    output.attachmentsOmitted = true;
+  }
+  if (snapshot) {
+    const headers = message.threadHeaders;
+    if (!headers || typeof headers.messageId !== "string" || headers.messageId.length > 998 || typeof headers.malformed !== "boolean" || typeof headers.truncated !== "boolean" || ![headers.references, headers.inReplyTo].every((ids) => Array.isArray(ids) && ids.length <= 64 && ids.every((id) => typeof id === "string" && id && id.length <= 998 && !/[<>\s]/u.test(id)))) throw new Error("Mail thread header response is invalid");
+    if (!headers.malformed && !headers.truncated && headers.messageId !== output.messageId) throw new Error("Mail RFC message identity disagrees with its headers");
+    output.threadHeaders = { messageId: headers.messageId, references: [...headers.references], inReplyTo: [...headers.inReplyTo], malformed: headers.malformed, truncated: headers.truncated };
+    output.key = output.mailboxId + "/" + output.id;
+  }
+  return output;
+}
+function safeCoverage(coverage, invocation) {
+  if (!coverage || coverage.since !== invocation.since || coverage.until !== invocation.until || !Number.isInteger(coverage.inspected) || coverage.inspected < 0 || coverage.inspected > 200 || !Number.isSafeInteger(coverage.eligibleCount) || coverage.eligibleCount < 0 || typeof coverage.scanTruncated !== "boolean" || typeof coverage.resultLimited !== "boolean" || coverage.historicalConversationComplete !== false) throw new Error("Mail coverage response is invalid");
+  return { since: invocation.since, until: invocation.until, inspected: coverage.inspected, eligibleCount: coverage.eligibleCount, scanTruncated: coverage.scanTruncated, resultLimited: coverage.resultLimited, ordering: "newest among inspected candidates", historicalConversationComplete: false };
+}
+function createScopedMailAdapter({ binDir, env = process.env, loadConfig = () => loadMailConfig(env), runScript, now = () => /* @__PURE__ */ new Date(), monotonicNow = () => performance.now(), operationTimeoutMs = 45e3 } = {}) {
+  if (!Number.isInteger(operationTimeoutMs) || operationTimeoutMs < 1 || operationTimeoutMs > 45e3) throw new Error("Mail overall operation timeout must be 1 to 45000 milliseconds");
+  const nativeRunner = runScript ?? ((payload, options) => runScopedMailScript(payload, { ...options, accessCliPath: typeof binDir === "string" ? join4(binDir, "mail-access-cli") : void 0 }));
+  return {
+    async runMail(args) {
+      const deadline = monotonicNow() + operationTimeoutMs;
+      const deadlineError = () => Object.assign(new Error("Mail read operation exceeded its overall deadline; no complete result is available"), { code: "MAIL_OPERATION_DEADLINE" });
+      const withinDeadline = (task) => {
+        const remaining = Math.floor(deadline - monotonicNow());
+        if (remaining < 1) return Promise.reject(deadlineError());
+        const controller = new AbortController();
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            controller.abort();
+            reject(deadlineError());
+          }, remaining);
+          Promise.resolve().then(() => task({ remaining, signal: controller.signal })).then((value) => {
+            if (deadline - monotonicNow() < 1) {
+              controller.abort();
+              reject(deadlineError());
+            } else resolve(value);
+          }, reject).finally(() => clearTimeout(timer));
+        });
+      };
+      const callNative = (payload) => withinDeadline(({ remaining, signal }) => nativeRunner(payload, { timeoutMs: Math.min(2e4, remaining), signal }));
+      const config2 = validateMailConfig({ mail: await withinDeadline(() => loadConfig()) });
+      const invocation = buildMailInvocation(args, config2, now());
+      const result = await callNative(invocation);
+      if (!result || result.success !== true) throw new Error("Mail command did not report success");
+      if (args.action === "get") {
+        const message = safeMessage(result.message, invocation, { body: true });
+        if (message.id !== args.id) throw new Error("Mail message ID does not match the scoped request");
+        return { success: true, message };
+      }
+      const coverage = safeCoverage(result.coverage, invocation);
+      if (!Array.isArray(result.messages) || result.messages.length > (args.action === "thread" ? 200 : invocation.limit)) throw new Error("Mail response exceeds its bounded result count");
+      const snapshot = args.action === "thread";
+      const messages = result.messages.map((message) => safeMessage(message, invocation, { snapshot, anyAllowedMailbox: snapshot }));
+      if (new Set(messages.map((message) => message.mailboxId + "/" + message.id)).size !== messages.length) throw new Error("Mail returned duplicate local scoped message IDs");
+      if (!snapshot) return { success: true, messages, coverage };
+      const selected = selectMailThread(messages, args.mailboxId + "/" + args.id).sort((a, b) => Date.parse(a.dateReceived) - Date.parse(b.dateReceived));
+      let selectedBodies = selected;
+      if (selected.length > invocation.limit) {
+        const seed = selected.find((message) => message.mailboxId === args.mailboxId && message.id === args.id);
+        selectedBodies = [...selected.filter((message) => message !== seed).slice(0, invocation.limit - 1), seed].sort((a, b) => Date.parse(a.dateReceived) - Date.parse(b.dateReceived));
+      }
+      const threadMessages = [];
+      for (const candidate of selectedBodies) {
+        const readInvocation = { ...invocation, op: "get", mailboxId: candidate.mailboxId, id: candidate.id, expectedRFC: candidate.messageId };
+        const readResult = await callNative(readInvocation);
+        if (!readResult || readResult.success !== true) throw new Error("Mail thread body read did not report success");
+        const message = safeMessage(readResult.message, readInvocation, { body: true });
+        if (message.id !== candidate.id || message.messageId !== candidate.messageId) throw new Error("Mail thread message identity changed before content read");
+        threadMessages.push(message);
+      }
+      return { success: true, messages: threadMessages, coverage: { ...coverage, ordering: "oldest first among selected related messages", resultLimited: selected.length > invocation.limit, threadMethod: "RFC References/In-Reply-To graph within allowed mailboxes and date window", headerRelationshipsIncomplete: messages.some((message) => message.threadHeaders.malformed || message.threadHeaders.truncated), completeHistoricalConversation: false, bodyTruncated: threadMessages.some((message) => message.contentTruncated) } };
+    }
+  };
 }
 
 // ../lib/scoped-dispatcher.js
@@ -18593,15 +19079,32 @@ var scopedTools = [...tools.filter((tool) => tool.name !== "mail").map((tool) =>
     description: "Scoped connector runtime status (no personal data or permission requests).",
     inputSchema: { type: "object", properties: { action: { type: "string", enum: ["status", "schema"] } }, required: ["action"], additionalProperties: false }
   };
-}), notesTool];
-function createScopedDispatcher({ runCLI: runCLI2, runNotes: runNotes2, loadConfig = loadConnectorConfig }) {
+}), notesTool, mailTool];
+function scopedToolsForContactsCompanion() {
+  const supported = /* @__PURE__ */ new Set(["action", "id", "container", "firstName", "lastName", "nickname", "organization", "fields", "dryRun"]);
+  return scopedTools.map((tool) => tool.name !== "contact" ? tool : {
+    ...tool,
+    description: "Scoped native Contacts companion. Actions: get by exact ID, create, update, schema. Basic firstName/lastName/nickname/organization fields only; no deletion or discovery. Requires approved companion installation and an existing Contacts grant. dryRun previews writes without launching the app.",
+    inputSchema: {
+      ...tool.inputSchema,
+      properties: {
+        ...Object.fromEntries(Object.entries(tool.inputSchema.properties).filter(([key]) => supported.has(key))),
+        action: { type: "string", enum: ["get", "create", "update", "schema"] },
+        dryRun: { type: "boolean", description: "Validate and preview a create/update without launching the app. Unsupported on get." }
+      },
+      additionalProperties: false
+    }
+  });
+}
+function createScopedDispatcher({ runCLI: runCLI2, runNotes: runNotes2, runContact: runContact2, runMail: runMail2, loadConfig = loadConnectorConfig }) {
+  const definitions = runContact2 ? scopedToolsForContactsCompanion() : scopedTools;
   const handlers = {
     calendar: withAgentDX("calendar", handleCalendar),
     reminder: withAgentDX("reminder", handleReminder),
     contact: withAgentDX("contact", handleContact)
   };
   return async (name, args = {}) => {
-    const tool = scopedTools.find((entry) => entry.name === name);
+    const tool = definitions.find((entry) => entry.name === name);
     if (!tool || !tool.inputSchema.properties.action.enum.includes(args.action)) {
       throw new Error(`Unsupported scoped connector tool/action: ${name}/${args.action}`);
     }
@@ -18610,20 +19113,335 @@ function createScopedDispatcher({ runCLI: runCLI2, runNotes: runNotes2, loadConf
     }
     if (args.action === "schema") return { tool: name, inputSchema: tool.inputSchema, description: tool.description };
     if (name === "apple-pim") {
-      return { connector: "icloud-mcp-connector", transport: "stdio", personalDataAccess: "requires explicit host configuration and existing macOS grants", deletionDefault: "disabled", cloudConnection: "not established by this local server" };
+      return { connector: "icloud-mcp-connector", transport: "stdio", contactsTransport: runContact2 ? "companion" : "direct", personalDataAccess: "requires explicit host configuration and existing macOS grants", deletionDefault: "disabled", cloudConnection: "not established by this local server" };
     }
     requireConnectorScope(name, args, loadConfig());
     if (name === "notes") {
       if (!runNotes2) throw new Error("Notes adapter is unavailable.");
       return runNotes2(args);
     }
+    if (name === "contact" && runContact2) return runContact2(args);
+    if (name === "mail") {
+      if (!runMail2) throw new Error("Scoped Mail adapter is unavailable.");
+      return runMail2(args);
+    }
     return handlers[name](args, runCLI2);
   };
 }
 
+// ../lib/contacts-companion.js
+import { execFile } from "node:child_process";
+import { createHash as createHash2, randomUUID } from "node:crypto";
+import { constants as constants2 } from "node:fs";
+import { lstat as lstat2, mkdir, open as open2, realpath as realpath2 } from "node:fs/promises";
+import { userInfo as userInfo2 } from "node:os";
+import { isAbsolute as isAbsolute4, join as join5, relative, sep } from "node:path";
+import { promisify } from "node:util";
+var CONTACTS_COMPANION_BUNDLE_ID = "com.elephruit.icloud-mcp-connector.contacts";
+var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var SHA256 = /^[0-9a-f]{64}$/;
+var ACTIONS = /* @__PURE__ */ new Set(["get", "create", "update"]);
+var NATIVE_ERROR_CODES = /* @__PURE__ */ new Set([
+  "COMPANION_INVALID_INVOCATION",
+  "COMPANION_UNSAFE_PATH",
+  "COMPANION_INVALID_SETTINGS",
+  "COMPANION_EXECUTABLE_MISMATCH",
+  "COMPANION_INVALID_CONFIGURATION",
+  "COMPANION_INVALID_REQUEST",
+  "COMPANION_ALREADY_CLAIMED",
+  "COMPANION_SCOPE_DENIED",
+  "COMPANION_AUTHORIZATION_REQUIRED",
+  "COMPANION_BUSY",
+  "COMPANION_OPERATION_FAILED",
+  "COMPANION_INVALID_RESULT",
+  "COMPANION_JOB_IO",
+  "COMPANION_AUTHORIZATION_FAILED"
+]);
+var TEXT_FIELDS = ["firstName", "lastName", "nickname", "organization"];
+var PARAMETER_FIELDS = ["id", "container", ...TEXT_FIELDS];
+var ARGUMENT_FIELDS = /* @__PURE__ */ new Set(["action", ...PARAMETER_FIELDS, "dryRun", "fields"]);
+var MAX_REQUEST_BYTES = 64 * 1024;
+var MAX_RESPONSE_BYTES = 1024 * 1024;
+var executeFile = promisify(execFile);
+var SYSTEM_ENV = Object.freeze({ PATH: "/usr/bin:/bin", LANG: "C" });
+var ownUID = () => process.geteuid();
+var digest = (bytes) => createHash2("sha256").update(bytes).digest("hex");
+var isObject2 = (value) => value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+var ContactsCompanionError = class extends Error {
+  constructor(code, message, { requestId, mutationMayHaveOccurred = false } = {}) {
+    super(message);
+    this.name = "ContactsCompanionError";
+    this.code = code;
+    this.mutationMayHaveOccurred = mutationMayHaveOccurred;
+    if (requestId) this.requestId = requestId;
+  }
+};
+function denied(message = "Contacts companion configuration or files failed validation; access is denied.") {
+  return new ContactsCompanionError("COMPANION_DENIED", message);
+}
+function exactKeys(object3, required2, optional2 = []) {
+  return isObject2(object3) && required2.every((key) => Object.hasOwn(object3, key)) && Object.keys(object3).every((key) => required2.includes(key) || optional2.includes(key));
+}
+function validID(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= 2048 && value.trim().length > 0 && !/[\p{Cc}\p{Cf}]/u.test(value);
+}
+function validateArguments(args) {
+  if (!isObject2(args) || Object.getOwnPropertySymbols(args).length || Object.keys(args).some((key) => !ARGUMENT_FIELDS.has(key)) || !ACTIONS.has(args.action)) {
+    throw denied("Contacts companion accepts only typed get, create, and update arguments.");
+  }
+  for (const key of ["id", "container"]) {
+    if (Object.hasOwn(args, key) && !validID(args[key])) throw denied("Contact identifiers must be bounded strings without control characters.");
+  }
+  for (const key of TEXT_FIELDS) {
+    if (Object.hasOwn(args, key) && (typeof args[key] !== "string" || args[key].includes("\0") || Buffer.byteLength(args[key], "utf8") > 4096)) {
+      throw denied("Contact text fields must be bounded strings without NUL characters.");
+    }
+  }
+  if (Object.hasOwn(args, "dryRun") && typeof args.dryRun !== "boolean") throw denied("dryRun must be a boolean.");
+  if (Object.hasOwn(args, "fields") && (!Array.isArray(args.fields) || args.fields.length > 64 || args.fields.some((field) => typeof field !== "string" || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(field) || ["__proto__", "constructor", "prototype"].includes(field)))) {
+    throw denied("fields must contain bounded field names.");
+  }
+  const supplied = PARAMETER_FIELDS.filter((key) => Object.hasOwn(args, key));
+  if (args.action === "get" && (!validID(args.id) || supplied.some((key) => key !== "id") || args.dryRun === true)) {
+    throw denied("Contact get requires only an ID; dryRun cannot read a contact.");
+  }
+  if (args.action === "create" && (!validID(args.container) || Object.hasOwn(args, "id") || !(args.firstName?.trim() || args.lastName?.trim()))) {
+    throw denied("Contact create requires an explicit container and a first or last name.");
+  }
+  if (args.action === "update" && (!validID(args.id) || Object.hasOwn(args, "container") || !TEXT_FIELDS.some((key) => Object.hasOwn(args, key)))) {
+    throw denied("Contact update requires an ID and at least one supported text field; container changes are disabled.");
+  }
+  return Object.fromEntries(supplied.map((key) => [key, args[key]]));
+}
+async function ensureDirectory(path, privateMode = false) {
+  const stat = await lstat2(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== ownUID() || (privateMode ? (stat.mode & 511) !== 448 : (stat.mode & 18) !== 0)) throw denied();
+}
+async function ensureChain(home, path) {
+  const suffix = relative(home, path);
+  if (!suffix || suffix === ".." || suffix.startsWith(`..${sep}`) || isAbsolute4(suffix)) throw denied();
+  let current = home;
+  for (const component of suffix.split(sep)) {
+    current = join5(current, component);
+    await ensureDirectory(current);
+  }
+}
+async function privateBytes(path, limit) {
+  const file = await open2(path, constants2.O_RDONLY | constants2.O_NOFOLLOW | constants2.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.uid !== ownUID() || stat.nlink !== 1 || (stat.mode & 511) !== 384 || stat.size < 1 || stat.size > limit) throw denied();
+    const bytes = Buffer.alloc(limit + 1);
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+    if (bytesRead < 1 || bytesRead > limit) throw denied();
+    return bytes.subarray(0, bytesRead);
+  } finally {
+    await file.close();
+  }
+}
+function decodeJSON(bytes) {
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
+async function privateJSON(path, limit = MAX_REQUEST_BYTES) {
+  return decodeJSON(await privateBytes(path, limit));
+}
+async function syncDirectory(path) {
+  const file = await open2(path, constants2.O_RDONLY | constants2.O_NOFOLLOW | constants2.O_NONBLOCK | constants2.O_DIRECTORY);
+  try {
+    const stat = await file.stat();
+    if (!stat.isDirectory() || stat.uid !== ownUID() || (stat.mode & 511) !== 448) throw denied();
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+}
+async function writeRequest(path, request) {
+  const bytes = Buffer.from(`${JSON.stringify(request)}
+`, "utf8");
+  if (bytes.length > MAX_REQUEST_BYTES) throw denied("Contacts companion request is too large.");
+  const file = await open2(path, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW, 384);
+  try {
+    await file.writeFile(bytes);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+}
+async function inspectInstalledApp({ appPath, infoPlistPath }) {
+  const { stdout } = await executeFile(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleIdentifier", "-c", "Print :CFBundleExecutable", "-c", "Print :CFBundlePackageType", infoPlistPath],
+    { timeout: 5e3, maxBuffer: 4096, env: SYSTEM_ENV }
+  );
+  const [bundleId, executableName, packageType, ...extra] = stdout.trim().split(/\r?\n/);
+  if (bundleId !== CONTACTS_COMPANION_BUNDLE_ID || executableName !== "contacts-cli" || packageType !== "APPL" || extra.length) throw denied();
+  await executeFile("/usr/bin/codesign", ["--verify", "--strict", appPath], { timeout: 5e3, maxBuffer: 4096, env: SYSTEM_ENV });
+  return { bundleId, executableName, packageType, signatureValid: true };
+}
+async function launchInstalledApp({ appPath, requestId, signal, timeoutMs }) {
+  await executeFile(
+    "/usr/bin/open",
+    ["-n", "-W", appPath, "--args", "--run-job", requestId],
+    { signal, timeout: timeoutMs, maxBuffer: 4096, killSignal: "SIGTERM", env: SYSTEM_ENV }
+  );
+}
+async function inspectExecutable(path) {
+  const file = await open2(path, constants2.O_RDONLY | constants2.O_NOFOLLOW | constants2.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.uid !== ownUID() || stat.nlink !== 1 || stat.mode & 18 || !(stat.mode & 64) || stat.size < 1 || stat.size > 128 * 1024 * 1024) throw denied();
+    const hash = createHash2("sha256");
+    let bytes = 0;
+    for await (const chunk of file.createReadStream({ autoClose: false })) {
+      bytes += chunk.length;
+      if (bytes > 128 * 1024 * 1024) throw denied();
+      hash.update(chunk);
+    }
+    return hash.digest("hex");
+  } finally {
+    await file.close();
+  }
+}
+function matches(object3, request, optional2 = []) {
+  return exactKeys(object3, ["version", "requestId", "action", ...optional2]) && object3.version === 1 && object3.requestId === request.requestId && object3.action === request.action;
+}
+async function readReceipt(jobPath, request, scope) {
+  await ensureDirectory(jobPath, true);
+  const claim2 = await privateJSON(join5(jobPath, "claim.json"));
+  if (!exactKeys(claim2, ["version", "requestId"]) || claim2.version !== 1 || claim2.requestId !== request.requestId) throw denied();
+  const completion = await privateJSON(join5(jobPath, "completion.json"));
+  if (!matches(completion, request, ["responseSHA256"]) || typeof completion.responseSHA256 !== "string" || !SHA256.test(completion.responseSHA256)) throw denied();
+  const responseBytes = await privateBytes(join5(jobPath, "response.json"), MAX_RESPONSE_BYTES);
+  if (digest(responseBytes) !== completion.responseSHA256) throw denied();
+  const response = decodeJSON(responseBytes);
+  if (!exactKeys(response, ["version", "requestId", "action", "success"], ["result", "error", "mutationMayHaveOccurred"]) || response.version !== 1 || response.requestId !== request.requestId || response.action !== request.action || typeof response.success !== "boolean" || Object.hasOwn(response, "mutationMayHaveOccurred") && typeof response.mutationMayHaveOccurred !== "boolean") throw denied();
+  let mutationStarted = false;
+  try {
+    const started = await privateJSON(join5(jobPath, "mutation-started.json"));
+    if (!matches(started, request)) throw denied();
+    mutationStarted = true;
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+  }
+  if (request.action === "get" && (mutationStarted || response.mutationMayHaveOccurred === true)) throw denied();
+  if (response.success) {
+    if (Object.hasOwn(response, "error") || !isObject2(response.result) || response.result.success !== true || !isObject2(response.result.contact) || !validID(response.result.contact.id) || request.action !== "create" && response.result.contact.id !== request.parameters.id || request.action !== "get" && !mutationStarted) throw denied();
+    const container = response.result.contact.sourceContainerId;
+    if ((request.action === "get" || container !== void 0) && (!validID(container) || !scope.items.includes(container) || !scope.accounts.includes(container))) throw denied();
+    return response.result;
+  }
+  if (Object.hasOwn(response, "result") || !NATIVE_ERROR_CODES.has(response.error) || response.mutationMayHaveOccurred !== mutationStarted) throw denied();
+  throw new ContactsCompanionError(
+    response.error,
+    "Contacts companion rejected the operation; the private job journal was retained.",
+    { requestId: request.requestId, mutationMayHaveOccurred: mutationStarted }
+  );
+}
+function createContactsCompanionRunner({
+  env = process.env,
+  homeDir = userInfo2().homedir,
+  launch = launchInstalledApp,
+  inspectApp = inspectInstalledApp,
+  timeoutMs = 45e3,
+  createRequestId = randomUUID
+} = {}) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 12e4) throw denied("Invalid Contacts companion timeout.");
+  return async (args) => {
+    const parameters = validateArguments(args);
+    let configDirectory;
+    let config2;
+    try {
+      if (!isAbsolute4(env.APPLE_PIM_CONFIG_DIR ?? "") || env.APPLE_PIM_PROFILE !== void 0) throw denied();
+      configDirectory = await realpath2(env.APPLE_PIM_CONFIG_DIR);
+      await ensureDirectory(env.APPLE_PIM_CONFIG_DIR, true);
+      config2 = await privateJSON(join5(configDirectory, "config.json"));
+    } catch {
+      throw denied("Missing or unsafe selected Contacts configuration; access is denied.");
+    }
+    requireConnectorScope("contact", args, config2);
+    if (args.action === "create" && (!config2.contacts.items.includes(args.container) || !config2.contacts.accounts.includes(args.container))) {
+      throw denied("Contact destination must be in both configured container allowlists.");
+    }
+    if (args.dryRun === true) return buildDryRunResponse("contact", args);
+    let appPath;
+    let jobsPath;
+    try {
+      if (!isAbsolute4(homeDir)) throw denied();
+      const home = await realpath2(homeDir);
+      const serviceRoot = join5(home, "Library", "Application Support", "iCloud MCP Connector", "Contacts");
+      await ensureChain(home, serviceRoot);
+      await ensureDirectory(serviceRoot, true);
+      const bridge = await privateJSON(join5(serviceRoot, "bridge.json"));
+      if (!exactKeys(bridge, ["version", "enabled", "configDirectory", "executableSHA256"]) || bridge.version !== 1 || bridge.enabled !== true || typeof bridge.configDirectory !== "string" || !isAbsolute4(bridge.configDirectory) || typeof bridge.executableSHA256 !== "string" || !SHA256.test(bridge.executableSHA256) || await realpath2(bridge.configDirectory) !== configDirectory) throw denied();
+      await ensureDirectory(bridge.configDirectory, true);
+      appPath = join5(home, "Applications", "iCloud MCP Contacts.app");
+      await ensureChain(home, join5(appPath, "Contents", "MacOS"));
+      const executablePath = join5(appPath, "Contents", "MacOS", "contacts-cli");
+      const infoPlistPath = join5(appPath, "Contents", "Info.plist");
+      const infoStat = await lstat2(infoPlistPath);
+      if (!infoStat.isFile() || infoStat.isSymbolicLink() || infoStat.uid !== ownUID() || infoStat.mode & 18) throw denied();
+      const identity = await inspectApp({ appPath, infoPlistPath, executablePath });
+      if (identity?.bundleId !== CONTACTS_COMPANION_BUNDLE_ID || identity.executableName !== "contacts-cli" || identity.packageType !== "APPL" || identity.signatureValid !== true || await inspectExecutable(executablePath) !== bridge.executableSHA256) throw denied();
+      jobsPath = join5(serviceRoot, "jobs");
+      try {
+        await mkdir(jobsPath, { mode: 448 });
+      } catch (error2) {
+        if (error2.code !== "EEXIST") throw error2;
+      }
+      await ensureDirectory(jobsPath, true);
+    } catch {
+      throw denied("Contacts companion is not installed, approved, or valid for the selected configuration; access is denied.");
+    }
+    const requestId = createRequestId();
+    if (typeof requestId !== "string" || !UUID.test(requestId)) throw denied("Invalid Contacts companion job identifier.");
+    const request = { version: 1, requestId, action: args.action, parameters };
+    const jobPath = join5(jobsPath, requestId);
+    try {
+      await mkdir(jobPath, { mode: 448 });
+      await ensureDirectory(jobPath, true);
+      await writeRequest(join5(jobPath, "request.json"), request);
+      await syncDirectory(jobPath);
+      await syncDirectory(jobsPath);
+    } catch {
+      throw denied("Contacts companion could not create a private exclusive job; it was not launched.");
+    }
+    const controller = new AbortController();
+    let timer;
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => launch({ appPath, requestId, signal: controller.signal, timeoutMs })),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("timeout"));
+          }, timeoutMs);
+        })
+      ]);
+    } catch {
+    } finally {
+      clearTimeout(timer);
+    }
+    let result;
+    try {
+      result = await readReceipt(jobPath, request, config2.contacts);
+    } catch (error2) {
+      if (error2 instanceof ContactsCompanionError && NATIVE_ERROR_CODES.has(error2.code)) throw error2;
+      throw new ContactsCompanionError(
+        "COMPANION_RESULT_UNKNOWN",
+        "Contacts companion result is unverified; do not retry automatically. Check the private job journal first.",
+        { requestId, mutationMayHaveOccurred: args.action !== "get" }
+      );
+    }
+    if (args.fields?.length) {
+      return { ...applyFieldSelection(result, args.fields), contact: applyFieldSelection(result.contact, args.fields) };
+    }
+    return result;
+  };
+}
+
 // ../lib/notes-config.js
-import { readFile } from "node:fs/promises";
-import { isAbsolute as isAbsolute2, join as join3 } from "node:path";
+import { readFile as readFile2 } from "node:fs/promises";
+import { isAbsolute as isAbsolute5, join as join6 } from "node:path";
 var MAX_CONFIG_BYTES = 64 * 1024;
 var MAX_SCOPE_ITEMS = 32;
 function exactIds(value, field) {
@@ -18653,17 +19471,17 @@ function validateNotesConfig(config2) {
     allowWrites: notes.allowWrites === true
   });
 }
-async function loadNotesConfig(env = process.env, readFileImpl = readFile) {
+async function loadNotesConfig(env = process.env, readFileImpl = readFile2) {
   if (env.APPLE_PIM_PROFILE) {
     throw new Error("Notes profiles are not supported; remove APPLE_PIM_PROFILE for Notes operations");
   }
   const directory = env.APPLE_PIM_CONFIG_DIR;
-  if (typeof directory !== "string" || !isAbsolute2(directory) || /[\u0000-\u001f\u007f]/u.test(directory)) {
+  if (typeof directory !== "string" || !isAbsolute5(directory) || /[\u0000-\u001f\u007f]/u.test(directory)) {
     throw new Error("Notes requires an explicit absolute APPLE_PIM_CONFIG_DIR");
   }
   let raw;
   try {
-    raw = await readFileImpl(join3(directory, "config.json"), "utf8");
+    raw = await readFileImpl(join6(directory, "config.json"), "utf8");
   } catch {
     throw new Error("Notes configuration is missing or unreadable; access remains disabled");
   }
@@ -18893,9 +19711,9 @@ end run
 `;
 
 // ../lib/notes.js
-import { isAbsolute as isAbsolute3, join as join4 } from "node:path";
+import { isAbsolute as isAbsolute6, join as join7 } from "node:path";
 var MAX_OUTPUT_BYTES = 256 * 1024;
-var ACTIONS = /* @__PURE__ */ new Set(["search", "get", "create", "append"]);
+var ACTIONS2 = /* @__PURE__ */ new Set(["search", "get", "create", "append"]);
 function requiredText(value, label, maxLength = 65536) {
   if (typeof value !== "string" || !value.trim() || value.length > maxLength || value.includes("\0")) {
     throw new Error(`Notes ${label} must be nonempty text (maximum ${maxLength} characters, no NUL)`);
@@ -18906,7 +19724,7 @@ function notesTextToHTML(text) {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;").split(/\r\n|\r|\n/u).map((line) => `<div>${line || "<br>"}</div>`).join("");
 }
 function buildNotesInvocation(args, config2) {
-  if (!args || typeof args !== "object" || Array.isArray(args) || !ACTIONS.has(args.action)) {
+  if (!args || typeof args !== "object" || Array.isArray(args) || !ACTIONS2.has(args.action)) {
     throw new Error("Notes action must be search, get, create, or append; deletion is unavailable");
   }
   if (args.configDir !== void 0 || args.profile !== void 0) {
@@ -18934,7 +19752,7 @@ function buildNotesInvocation(args, config2) {
 }
 function checkNotesAccess({ accessCliPath, spawnImpl = spawnProcess, platform = process.platform, timeoutMs = 2e3 } = {}) {
   if (platform !== "darwin") return Promise.reject(new Error("Notes automation requires macOS"));
-  if (typeof accessCliPath !== "string" || !isAbsolute3(accessCliPath)) return Promise.reject(new Error("Notes permission preflight is unavailable; build notes-access-cli and bind its fixed path"));
+  if (typeof accessCliPath !== "string" || !isAbsolute6(accessCliPath)) return Promise.reject(new Error("Notes permission preflight is unavailable; build notes-access-cli and bind its fixed path"));
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5e3) return Promise.reject(new Error("Notes permission preflight timeout is invalid"));
   return new Promise((resolve, reject) => {
     const child = spawnImpl(accessCliPath, ["status"], { shell: false, stdio: ["ignore", "pipe", "pipe"] });
@@ -19058,7 +19876,7 @@ function validateNote(note, args, config2, includeText) {
   return safeNote;
 }
 function createNotesAdapter({ env = process.env, binDir, readFileImpl, runScript } = {}) {
-  const nativeRunner = runScript ?? ((argv) => runNotesScript(argv, { accessCliPath: typeof binDir === "string" ? join4(binDir, "notes-access-cli") : void 0 }));
+  const nativeRunner = runScript ?? ((argv) => runNotesScript(argv, { accessCliPath: typeof binDir === "string" ? join7(binDir, "notes-access-cli") : void 0 }));
   return {
     async runNotes(args) {
       const config2 = await loadNotesConfig(env, readFileImpl);
@@ -19092,16 +19910,21 @@ function createNotesAdapter({ env = process.env, binDir, readFileImpl, runScript
 }
 
 // server.js
-var __dirname = dirname(fileURLToPath(import.meta.url));
-var checkoutRoot = basename(__dirname) === "dist" ? join5(__dirname, "..", "..") : join5(__dirname, "..");
-var SWIFT_BIN_DIR = join5(checkoutRoot, "swift", ".build", "release");
+var __dirname = dirname2(fileURLToPath(import.meta.url));
+var checkoutRoot = basename(__dirname) === "dist" ? join8(__dirname, "..", "..") : join8(__dirname, "..");
+var SWIFT_BIN_DIR = join8(checkoutRoot, "swift", ".build", "release");
 var cliEnv = {};
 for (const key of ["APPLE_PIM_CONFIG_DIR", "APPLE_PIM_PROFILE", "APPLE_PIM_DATE_FORMAT"]) {
   if (process.env[key] !== void 0) cliEnv[key] = process.env[key];
 }
 var { runCLI } = createCLIRunner(SWIFT_BIN_DIR, cliEnv, { helperExists: () => false });
 var { runNotes } = createNotesAdapter({ binDir: SWIFT_BIN_DIR });
-var handleTool = createScopedDispatcher({ runCLI, runNotes });
+var { runMail } = createScopedMailAdapter({ binDir: SWIFT_BIN_DIR });
+var contactsTransport = process.env.APPLE_PIM_CONTACTS_TRANSPORT ?? "direct";
+if (!["direct", "companion"].includes(contactsTransport)) throw new Error("Invalid host Contacts transport; access is denied.");
+var runContact = contactsTransport === "companion" ? createContactsCompanionRunner() : void 0;
+var activeTools = runContact ? scopedToolsForContactsCompanion() : scopedTools;
+var handleTool = createScopedDispatcher({ runCLI, runNotes, runContact, runMail });
 var server = new Server(
   {
     name: "apple-pim",
@@ -19114,7 +19937,7 @@ var server = new Server(
   }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: scopedTools };
+  return { tools: activeTools };
 });
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -19140,7 +19963,12 @@ ${JSON.stringify(markedResult, null, 2)}`
           text: JSON.stringify(
             {
               success: false,
-              error: error2.message
+              error: error2.message,
+              ...error2 instanceof ContactsCompanionError ? {
+                code: error2.code,
+                ...error2.requestId ? { requestId: error2.requestId } : {},
+                mutationMayHaveOccurred: error2.mutationMayHaveOccurred
+              } : {}
             },
             null,
             2

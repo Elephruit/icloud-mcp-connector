@@ -4,7 +4,6 @@ import Foundation
 import PIMConfig
 import Security
 
-@main
 struct ContactsCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "contacts-cli",
@@ -881,12 +880,17 @@ struct GetContact: AsyncParsableCommand {
     var id: String
 
     func run() async throws {
-        let config = pimOptions.loadConfig()
+        outputJSON(try result(config: pimOptions.loadConfig()))
+    }
+
+    // A native companion reuses this operation in its own app identity without
+    // loading an ambient profile or terminating before writing job completion.
+    func result(config: PIMConfiguration) throws -> [String: Any] {
         let allowedIds = try prepareContactsAccess(config: config)
         let found = try fetchScopedContact(id: id, allowedIds: allowedIds)
         var result = contactToDict(found.contact, brief: false)
         result["sourceContainerId"] = found.containerId
-        outputJSON(["success": true, "contact": result])
+        return ["success": true, "contact": result]
     }
 }
 
@@ -994,7 +998,10 @@ struct CreateContact: AsyncParsableCommand {
     var notes: String?
 
     func run() async throws {
-        let config = pimOptions.loadConfig()
+        outputJSON(try result(config: pimOptions.loadConfig()))
+    }
+
+    func result(config: PIMConfiguration) throws -> [String: Any] {
         let configuredIds = try allowedContactContainerIdentifiers(config: config)
         let targetContainerId = try validateContactDestination(id: container, allowedIds: configuredIds)
         let allowedIds = try prepareContactsAccess(config: config, writing: true)
@@ -1074,11 +1081,11 @@ struct CreateContact: AsyncParsableCommand {
         saveRequest.add(contact, toContainerWithIdentifier: targetContainerId)
         try contactStore.execute(saveRequest)
 
-        outputJSON([
+        return [
             "success": true,
             "message": "Contact created successfully",
             "contact": contactToDict(contact, brief: false)
-        ])
+        ]
     }
 }
 
@@ -1183,7 +1190,10 @@ struct UpdateContact: AsyncParsableCommand {
     var notes: String?
 
     func run() async throws {
-        let config = pimOptions.loadConfig()
+        outputJSON(try result(config: pimOptions.loadConfig()))
+    }
+
+    func result(config: PIMConfiguration) throws -> [String: Any] {
         let allowedIds = try prepareContactsAccess(config: config, writing: true)
         let existing = try fetchScopedContact(id: id, allowedIds: allowedIds)
         let contact = existing.contact.mutableCopy() as! CNMutableContact
@@ -1193,11 +1203,11 @@ struct UpdateContact: AsyncParsableCommand {
         // A failed save is returned to the caller. Retrying or silently routing
         // through Contacts.app can partly apply changes and request Automation.
         try contactStore.execute(request)
-        outputJSON([
+        return [
             "success": true,
             "message": "Contact updated successfully",
             "contact": contactToDict(contact, brief: false)
-        ])
+        ]
     }
 
     private func applyContactMutations(

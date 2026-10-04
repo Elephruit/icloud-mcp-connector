@@ -1,7 +1,8 @@
 # iCloud MCP Connector
 
 A macOS connector for scoped iCloud Calendar (including an approved shared
-Family calendar), Reminders, Contacts, and Notes, designed for Codex and dots.
+Family calendar), Reminders, Contacts, Notes, and read-only Mail, designed for
+Codex and dots.
 Fork of
 [Omar Shahine's apple-pim](https://github.com/omarshahine/apple-pim), under the
 [MIT license](LICENSE). Copyright (c) 2025 Omar Shahine is preserved unchanged.
@@ -10,7 +11,8 @@ architecture context; its broad defaults and installation instructions do not
 describe this prototype's approved workflow.
 
 Upstream already provided local stdio MCP tools. This fork extends that
-foundation with explicit account/resource scopes, write opt-ins, Notes support
+foundation with explicit account/resource scopes, write opt-ins, Notes support,
+bounded read-only Mail
 and a Codex plugin package targeted at making these tools useful to dots.
 Direct dot connectivity remains in development: a supported, approved Mac-side
 execution route is required.
@@ -32,8 +34,12 @@ execution route is required.
   an older installation or launches the upstream helper app automatically.
 - Notes supports scoped search/get/create/append. Writes require
   `allowWrites: true`; Notes has no deletion action. It rejects profiles for now.
-- Mail is excluded from the scoped MCP surface. The inherited standalone Mail
-  CLI and OpenClaw adapter are outside this prototype's validated interface.
+- Mail supports scoped list/search/get/thread reads through an original fixed
+  Mail.app JXA adapter. Exact iCloud account and mailbox paths must be enrolled
+  privately; Mail must already be running with an existing Automation grant.
+  There are no sends, deletions, read-state mutation commands or attachment exports.
+  The inherited standalone Mail CLI and OpenClaw adapter remain outside this
+  interface. See [Mail scope and limits](docs/mail-adapter.md).
 
 Native domain scopes enable reads; their mutations additionally require
 `allow_writes`. Keep per-call client approval enabled. Notes has a separate
@@ -86,6 +92,15 @@ save errors are returned without an AppleScript recovery or implicit prompt.
 Contact ID lookups first inspect identifier-only membership in allowed containers
 and then fetch only the matching raw card's details; linked unified IDs are denied.
 
+Mail uses an exact native iCloud account ID plus a key derived from that account
+and an exact ordered mailbox path. Its manual enrollment helper reads metadata
+only after separate approval and saves selectors outside Git. Mailbox keys are
+connector selectors, not native stable IDs; renaming a mailbox requires renewed
+enrollment. Lists/searches inspect at most 200 candidates in a maximum 31-day
+window. Thread reads follow RFC References/In-Reply-To links in approved
+mailboxes and disclose incomplete coverage. They do not promise a complete
+historical conversation. Mail stays disabled until its private scope is approved.
+
 Calendar ID lookup uses queries limited to allowed calendars, covering 366 days
 before and after now by default. Set `from`/`to` for get/update/delete when
 needed (maximum four-year span); narrow that range for ambiguous recurring IDs.
@@ -118,6 +133,10 @@ private host configuration and the separately approved installation flow.
 Installation and permissions must be verified on each owner's host. A local
 plugin runtime check does not establish a direct ChatGPT cloud connection or
 personal-data access.
+An optional [native Contacts companion](docs/contacts-companion.md) provides a
+separately approved app identity for basic get/create/update calls when the
+direct host lacks Contacts authorization. Its installation and live grant are
+separate from building the source package.
 
 ## Local validation
 

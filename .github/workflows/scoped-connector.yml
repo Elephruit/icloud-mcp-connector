@@ -2,7 +2,7 @@ name: Scoped Connector
 
 on:
   push:
-    branches: [main, feature/scoped-icloud-foundation]
+    branches: [main, feature/scoped-icloud-foundation, feature/local-plugin-connectivity]
   pull_request:
   workflow_dispatch:
 
@@ -35,8 +35,8 @@ jobs:
       - name: Native synthetic tests and build
         working-directory: swift
         run: |
-          swift test --filter 'PIMConfigTests|CalendarCLITests|ReminderCLITests|ContactsCLITests'
-          swift build -c release
+          swift test --filter 'PIMConfigTests|CalendarCLITests|ReminderCLITests|ContactsCLITests|MailAccessCLITests'
+          swift build -c release -Xswiftc -gnone -Xswiftc -file-prefix-map -Xswiftc "$PWD=/source/apple-pim/swift" -Xswiftc -debug-prefix-map -Xswiftc "$PWD=/source/apple-pim/swift"
 
       - name: MCP unit tests and bundle
         working-directory: mcp-server
@@ -49,6 +49,11 @@ jobs:
 
       - name: Typecheck manual scope helper without executing it
         run: swiftc -parse-as-library -typecheck scripts/enroll-native-test-scopes.swift
+
+      - name: Stage and verify native Contacts companion without launching it
+        run: |
+          companion_build_root="$(node --input-type=module -e 'import { mkdtemp, realpath } from "node:fs/promises"; import { tmpdir } from "node:os"; import { join } from "node:path"; process.stdout.write(await mkdtemp(join(await realpath(tmpdir()), "icloud-contacts-build.")));')"
+          node scripts/build-contacts-companion.mjs --output "$companion_build_root/iCloud MCP Contacts.app"
 
       - name: Check patch formatting
         run: git diff --check

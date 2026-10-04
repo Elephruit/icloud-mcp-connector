@@ -10,7 +10,7 @@ import { preparePluginLaunch, validatePluginConfig } from "../scripts/plugin-lau
 
 const checkout = fileURLToPath(new URL("..", import.meta.url));
 const loadJSON = async (path) => JSON.parse(await readFile(join(checkout, path), "utf8"));
-const executables = ["calendar-cli", "reminder-cli", "contacts-cli", "notes-access-cli"];
+const executables = ["calendar-cli", "reminder-cli", "contacts-cli", "notes-access-cli", "mail-access-cli"];
 const validScope = () => ({ enabled: true, mode: "allowlist", items: ["synthetic-resource"], accounts: ["synthetic-account"], allow_writes: false, allow_deletes: false });
 
 async function fixture() {
@@ -36,11 +36,11 @@ test("portable manifest and Codex overlay share scoped identity and preserve ups
   ]);
   assert.equal(manifest.$schema, "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
   assert.equal(manifest.name, "icloud-mcp-connector");
-  assert.equal(manifest.version, "0.1.0");
+  assert.equal(manifest.version, "0.2.0");
   assert.equal(manifest.license, "MIT");
   assert.equal(manifest.repository, "https://github.com/Elephruit/icloud-mcp-connector");
   assert.match(manifest.description, /apple-pim and its existing stdio MCP/);
-  assert.match(manifest.description, /dots in development/);
+  assert.match(manifest.description, /dots (?:remains )?in development/);
   assert.ok(manifest.extensions["com.openai"].interface.shortDescription.length <= 30);
   for (const key of ["name", "version", "description", "author", "homepage", "repository", "license", "keywords"]) {
     assert.deepEqual(overlay[key], manifest[key]);
@@ -78,9 +78,9 @@ test("shipped configuration denies every connection, write and delete", async ()
   for (const [name, scope] of Object.entries(config)) {
     assert.equal(scope.enabled, false);
     assert.deepEqual(scope.accounts, []);
-    assert.deepEqual(name === "notes" ? scope.folders : scope.items, []);
-    assert.equal(name === "notes" ? scope.allowWrites : scope.allow_writes, false);
-    if (name !== "notes") assert.equal(scope.allow_deletes, false);
+    assert.deepEqual(name === "notes" ? scope.folders : name === "mail" ? scope.mailboxes : scope.items, []);
+    assert.equal(["notes", "mail"].includes(name) ? scope.allowWrites : scope.allow_writes, false);
+    if (!["notes", "mail"].includes(name)) assert.equal(scope.allow_deletes, false);
   }
 });
 
@@ -97,8 +97,15 @@ test("launcher rejects broad scopes, wildcard/duplicate IDs and nonboolean flags
   }
   assert.throws(() => validatePluginConfig({ notes: { enabled: true, accounts: ["synthetic"], folders: [] } }), /exact resource/);
   assert.throws(() => validatePluginConfig({ notes: { enabled: false, allowWrites: "true" } }), /flag/);
-  assert.throws(() => validatePluginConfig({ mail: { enabled: true } }), /outside/);
+  assert.throws(() => validatePluginConfig({ mail: { enabled: true } }), /explicit native account/);
+  assert.throws(() => validatePluginConfig({ mail: { enabled: false, allowWrites: true } }), /read-only Mail/);
   validatePluginConfig({ contacts: validScope() });
+  for (const transport of ["direct", "companion"]) {
+    validatePluginConfig({ contacts: { ...validScope(), transport } });
+  }
+  for (const transport of ["auto", "helper", "", true, null]) {
+    assert.throws(() => validatePluginConfig({ contacts: { ...validScope(), transport } }), /Contacts transport/);
+  }
 });
 
 test("launcher rejects implicit, relative and unexpanded config and selected profiles", async () => {
@@ -113,8 +120,19 @@ test("launcher allows an owner-only external disabled config without creating an
   try {
     const result = await preparePluginLaunch({ env: f.env, root: f.packageRoot });
     assert.equal(result.configDirectory, await realpath(f.configDirectory));
+    assert.equal(result.contactsTransport, "direct");
     assert.equal(result.server, await realpath(join(f.packageRoot, "mcp-server", "dist", "server.js")));
     assert.equal(await readFile(f.configPath, "utf8"), "{}");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("only host-owned private configuration selects the companion plugin transport", async () => {
+  const f = await fixture();
+  try {
+    const env = { ...f.env, APPLE_PIM_CONTACTS_TRANSPORT: "companion" };
+    assert.equal((await preparePluginLaunch({ env, root: f.packageRoot })).contactsTransport, "direct");
+    await writeFile(f.configPath, JSON.stringify({ contacts: { enabled: false, transport: "companion" } }));
+    assert.equal((await preparePluginLaunch({ env: f.env, root: f.packageRoot })).contactsTransport, "companion");
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
@@ -171,7 +189,8 @@ test("relocated built local package starts, discovers tools and denies personal 
   let client;
   try {
     await mkdir(join(f.packageRoot, "scripts"), { recursive: true });
-    for (const path of ["plugin.json", "mcp.json", "scripts/plugin-launcher.mjs", "mcp-server/dist/server.js"]) {
+    await mkdir(join(f.packageRoot, "lib"), { recursive: true });
+    for (const path of ["plugin.json", "mcp.json", "scripts/plugin-launcher.mjs", "lib/scoped-mail-config.js", "mcp-server/dist/server.js"]) {
       await copyFile(join(checkout, path), join(f.packageRoot, path));
     }
     for (const name of executables) {
@@ -190,7 +209,7 @@ test("relocated built local package starts, discovers tools and denies personal 
     });
     client = new Client({ name: "synthetic-plugin-validation", version: "1.0.0" });
     await client.connect(transport);
-    assert.deepEqual((await client.listTools()).tools.map((entry) => entry.name).sort(), ["apple-pim", "calendar", "contact", "notes", "reminder"]);
+    assert.deepEqual((await client.listTools()).tools.map((entry) => entry.name).sort(), ["apple-pim", "calendar", "contact", "mail", "notes", "reminder"]);
     const status = await client.callTool({ name: "apple-pim", arguments: { action: "status" } });
     assert.notEqual(status.isError, true);
     assert.match(status.content[0].text, /icloud-mcp-connector/);
@@ -199,11 +218,12 @@ test("relocated built local package starts, discovers tools and denies personal 
       ["calendar", { action: "list" }], ["reminder", { action: "lists" }],
       ["contact", { action: "containers" }], ["notes", { action: "search", query: "synthetic" }],
       ["contact", { action: "create", givenName: "Synthetic", container: "synthetic" }],
+      ["mail", { action: "list", accountId: "synthetic", mailboxId: "synthetic" }],
       ["notes", { action: "create", accountId: "synthetic", folderId: "synthetic", title: "Synthetic", text: "Synthetic" }],
     ]) {
       const denied = await client.callTool({ name, arguments: args });
       assert.equal(denied.isError, true);
-      assert.match(denied.content[0].text, /access is denied/);
+      assert.match(denied.content[0].text, /access is denied|Mail is disabled/);
     }
     const override = await client.callTool({ name: "calendar", arguments: { action: "list", configDir: "/synthetic" } });
     assert.equal(override.isError, true);

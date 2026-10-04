@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "enabled": false,
+  "configDirectory": "/absolute/path/to/private-config",
+  "executableSHA256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

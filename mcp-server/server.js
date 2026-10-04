@@ -17,8 +17,10 @@ import {
   getDatamarkingPreamble,
 } from "../lib/sanitize.js";
 import { createCLIRunner } from "../lib/cli-runner.js";
-import { createScopedDispatcher, scopedTools } from "../lib/scoped-dispatcher.js";
+import { createScopedDispatcher, scopedTools, scopedToolsForContactsCompanion } from "../lib/scoped-dispatcher.js";
+import { ContactsCompanionError, createContactsCompanionRunner } from "../lib/contacts-companion.js";
 import { createNotesAdapter } from "../lib/notes.js";
+import { createScopedMailAdapter } from "../lib/scoped-mail.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,7 +34,12 @@ for (const key of ["APPLE_PIM_CONFIG_DIR", "APPLE_PIM_PROFILE", "APPLE_PIM_DATE_
 }
 const { runCLI } = createCLIRunner(SWIFT_BIN_DIR, cliEnv, { helperExists: () => false });
 const { runNotes } = createNotesAdapter({ binDir: SWIFT_BIN_DIR });
-const handleTool = createScopedDispatcher({ runCLI, runNotes });
+const { runMail } = createScopedMailAdapter({ binDir: SWIFT_BIN_DIR });
+const contactsTransport = process.env.APPLE_PIM_CONTACTS_TRANSPORT ?? "direct";
+if (!["direct", "companion"].includes(contactsTransport)) throw new Error("Invalid host Contacts transport; access is denied.");
+const runContact = contactsTransport === "companion" ? createContactsCompanionRunner() : undefined;
+const activeTools = runContact ? scopedToolsForContactsCompanion() : scopedTools;
+const handleTool = createScopedDispatcher({ runCLI, runNotes, runContact, runMail });
 
 // Create and run server
 const server = new Server(
@@ -48,7 +55,7 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: scopedTools };
+  return { tools: activeTools };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -78,6 +85,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               success: false,
               error: error.message,
+              ...(error instanceof ContactsCompanionError ? {
+                code: error.code,
+                ...(error.requestId ? { requestId: error.requestId } : {}),
+                mutationMayHaveOccurred: error.mutationMayHaveOccurred,
+              } : {}),
             },
             null,
             2

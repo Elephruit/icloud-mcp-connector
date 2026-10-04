@@ -13,12 +13,14 @@ let package = Package(
         .executable(name: "contacts-cli", targets: ["ContactsCLI"]),
         .executable(name: "mail-cli", targets: ["MailCLI"]),
         .executable(name: "notes-access-cli", targets: ["NotesAccessCLI"]),
+        .executable(name: "mail-access-cli", targets: ["MailAccessCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
         .executableTarget(name: "NotesAccessCLI", path: "Sources/NotesAccessCLI"),
+        .executableTarget(name: "MailAccessCLI", path: "Sources/MailAccessCLI"),
         .target(
             name: "PIMConfig",
             dependencies: [
@@ -82,6 +84,11 @@ let package = Package(
             name: "MailCLITests",
             dependencies: ["MailCLI"],
             path: "Tests/MailCLITests"
+        ),
+        .testTarget(
+            name: "MailAccessCLITests",
+            dependencies: ["MailAccessCLI"],
+            path: "Tests/MailAccessCLITests"
         ),
     ]
 )

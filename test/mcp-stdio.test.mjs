@@ -23,7 +23,7 @@ test("built stdio protocol discovers safe tools, returns status, and rejects uns
   try {
     await client.connect(transport);
     const result = await client.listTools();
-    assert.deepEqual(result.tools.map((tool) => tool.name).sort(), ["apple-pim", "calendar", "contact", "notes", "reminder"]);
+    assert.deepEqual(result.tools.map((tool) => tool.name).sort(), ["apple-pim", "calendar", "contact", "mail", "notes", "reminder"]);
     const status = await client.callTool({ name: "apple-pim", arguments: { action: "status" } });
     assert.notEqual(status.isError, true);
     assert.match(status.content[0].text, /icloud-mcp-connector/);
@@ -34,6 +34,7 @@ test("built stdio protocol discovers safe tools, returns status, and rejects uns
       ["notes", { action: "search", query: "synthetic" }, /access is denied/],
       ["apple-pim", { action: "authorize" }, /Unsupported/],
       ["mail", { action: "messages" }, /Unsupported/],
+      ["mail", { action: "list", accountId: "synthetic", mailboxId: "synthetic" }, /Mail is disabled/],
     ]) {
       const denied = await client.callTool({ name, arguments: args });
       assert.equal(denied.isError, true);

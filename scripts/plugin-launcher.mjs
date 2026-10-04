@@ -5,10 +5,11 @@ import { access, readFile, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { validateMailConfig } from "../lib/scoped-mail-config.js";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_CONFIG_BYTES = 64 * 1024;
-const nativeExecutables = ["calendar-cli", "reminder-cli", "contacts-cli", "notes-access-cli"];
+const nativeExecutables = ["calendar-cli", "reminder-cli", "contacts-cli", "notes-access-cli", "mail-access-cli"];
 const inside = (root, target) => {
   const path = relative(root, target);
   return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
@@ -32,13 +33,21 @@ export function validatePluginConfig(config) {
     if (flags.some((key) => domain[key] !== undefined && typeof domain[key] !== "boolean")) {
       throw new Error(`Invalid ${name} write/deletion flag; access is denied.`);
     }
+    if (name === "contacts" && domain.transport !== undefined && !["direct", "companion"].includes(domain.transport)) {
+      throw new Error("Invalid Contacts transport; access is denied.");
+    }
     if (domain.enabled === true && (!exactIDs(domain.accounts) ||
         !exactIDs(name === "notes" ? domain.folders : domain.items) ||
         (name !== "notes" && domain.mode !== "allowlist"))) {
       throw new Error(`${name} requires exact resource and account allowlists; access is denied.`);
     }
   }
-  if (config.mail?.enabled === true) throw new Error("Mail is outside the scoped local plugin.");
+  if (config.mail !== undefined) {
+    const mail = config.mail;
+    if (!mail || typeof mail !== "object" || Array.isArray(mail) || typeof mail.enabled !== "boolean" ||
+        (mail.allowWrites !== undefined && mail.allowWrites !== false)) throw new Error("Invalid read-only Mail configuration.");
+    if (mail.enabled) validateMailConfig(config);
+  }
   return config;
 }
 
@@ -89,14 +98,15 @@ export async function preparePluginLaunch({ env = process.env, root = packageRoo
   } catch {
     throw new Error("Reviewed bundled MCP server/native binaries are missing. Build or stage the package before installation; no automatic installation is performed.");
   }
-  return { server, configDirectory };
+  return { server, configDirectory, contactsTransport: config.contacts?.transport ?? "direct" };
 }
 
 export async function startPlugin() {
   if (process.platform !== "darwin") throw new Error("iCloud MCP Connector requires a local Mac.");
-  const { server, configDirectory } = await preparePluginLaunch();
+  const { server, configDirectory, contactsTransport } = await preparePluginLaunch();
   process.env.APPLE_PIM_CONFIG_DIR = configDirectory;
   delete process.env.APPLE_PIM_PROFILE; // Empty host variables must not select a profile.
+  process.env.APPLE_PIM_CONTACTS_TRANSPORT = contactsTransport;
   await import(pathToFileURL(server).href);
 }
 

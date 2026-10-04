@@ -1,13 +1,13 @@
 # Local Mac plugin
 
 This source package adds **iCloud MCP Connector** (`icloud-mcp-connector`, version
-`0.1.0`) to the scoped fork. It contains portable `plugin.json` / `mcp.json`, a
+`0.2.0`) to the scoped fork. It contains portable `plugin.json` / `mcp.json`, a
 matching Codex compatibility manifest, a scoped workflow skill and a guarded
 Node launcher. The upstream Claude/OpenClaw version `3.18.0` and Omar Shahine's
 MIT copyright remain unchanged; these are separate package identities.
 
 Upstream [apple-pim](https://github.com/omarshahine/apple-pim) already supplied
-stdio MCP. This fork adds safe account/resource scoping, Notes tools and the
+stdio MCP. This fork adds safe account/resource scoping, Notes, read-only Mail and the
 Codex plugin package. It aims to support dots through a connected Mac; direct
 cloud MCP access remains in development. The renamed project is
 [icloud-mcp-connector](https://github.com/Elephruit/icloud-mcp-connector).
@@ -40,12 +40,18 @@ cannot supply them. Stage a self-contained directory named `icloud-mcp-connector
 
 - `plugin.json`, `mcp.json`, `.codex-plugin/plugin.json` and `LICENSE`.
 - `scripts/plugin-launcher.mjs` and `mcp-server/dist/server.js`.
+- `lib/scoped-mail-config.js`, which the launcher validates before startup.
 - `skills/icloud-mcp-connector/`.
 - The actual executable files `calendar-cli`, `reminder-cli`, `contacts-cli` and
-  `notes-access-cli` into `swift/.build/release/` in the staged package. Copy the
+  `notes-access-cli` and `mail-access-cli` into `swift/.build/release/` in the staged package. Copy the
   files themselves rather than the SwiftPM directory symlink.
-- `examples/scoped-config.example.json` and the setup, Notes and transport docs
+- `examples/scoped-config.example.json` and the setup, Contacts companion, Notes, Mail and transport docs
   referenced by the skill under `docs/`.
+
+The optional Contacts companion is a separate native bundle; it is not copied
+into the plugin cache or installed by the launcher. Its reviewed build and
+explicit private transport selection are described in
+[Contacts companion setup](contacts-companion.md).
 
 Keep the same relative paths. Exclude `.git`, dependency directories, Swift
 caches, personal/private configuration, logs, test outputs and unrelated
@@ -79,7 +85,9 @@ true` and exact account/resource arrays; native domains also require `mode:
 "allowlist"`. Contacts uses the same `CNContainer.identifier` in `items` and
 `accounts`. Writes require `allow_writes: true` for native domains or
 `allowWrites: true` for Notes. Deletion requires a separate `allow_deletes`
-opt-in and approved cleanup; Notes does not implement deletion.
+opt-in and approved cleanup; Notes does not implement deletion. Mail is strictly
+read-only and requires `allowWrites: false`, exact iCloud account IDs and exact
+enrolled mailbox records; see [Mail setup](mail-adapter.md).
 
 This plugin uses base configuration only. Leave `APPLE_PIM_PROFILE` unset. A
 nonempty profile makes the launcher fail, preventing an inherited native profile
@@ -118,8 +126,8 @@ enabled_tools = ["apple-pim"]
 `plugin list --json` verifies installation metadata; `mcp list --json` verifies
 the resolved command, package root and `PLUGIN_DATA`. Neither invokes the tool.
 Check the actual host's MCP view and call `apple-pim` with `action: "status"`.
-The server implements five tools: `apple-pim`, `calendar`, `reminder`, `contact`
-and `notes`; the initial client policy exposes only `apple-pim`. Enabling domain
+The server implements six tools: `apple-pim`, `calendar`, `reminder`, `contact`,
+`notes` and `mail`; the initial client policy exposes only `apple-pim`. Enabling domain
 tools and adding private scopes require the owner's approved targets. Keep tool
 approval at `prompt`, since each domain tool combines reads and writes. Status
 does not prove personal-data grants, iCloud sync or direct cloud connectivity.
@@ -140,19 +148,23 @@ missing, stop and explain the exact setup action before requesting approval:
 | Reminders | Full Reminders Access for the responsible host process | Exact approved list/source; clearly labeled synthetic record |
 | Contacts | Contacts Access for the responsible host process | Exact approved container; clearly labeled synthetic contact |
 | Notes | Automation control of Notes by the responsible host process | Exact approved account and isolated folder; synthetic plain-text note |
+| Mail | Automation control of Mail by the responsible host process | Approved iCloud account metadata, then exact mailbox paths and bounded read-only scope |
 
 macOS grants are broader than the connector allowlists and can persist. The
 prompt's app identity depends on the actual responsible host process; report
-what the prompt shows rather than assuming it names this package. Notes must
-already be running. Its preflight never grants Automation access. Permission
+what the prompt shows rather than assuming it names this package. Notes and Mail must
+already be running. Their preflights never grant Automation access. Permission
 requests are a separate approved local setup step, not a tool-call recovery.
 
 Contacts acceptance under a temporary app tests that app's process chain only.
 It does not transfer permission to a separately launched plugin under
 ChatGPT/Codex/Node. For an approved app-identity test, use a native Mach-O main
 executable and an explicit Contacts usage description; shell-script main
-executables can break macOS privacy attribution. A runtime companion app is a
-separate design and permission decision, not an automatic recovery step.
+executables can break macOS privacy attribution. The optional native runtime
+companion has its own installation and permission decision; it is not an
+automatic recovery step. Its tested basic interface and the remaining
+installed-plugin live acceptance are documented in
+[Contacts companion setup](contacts-companion.md).
 [Apple's native-executable and responsible-code guidance](https://developer.apple.com/forums/thread/678819)
 
 For each live write, preview the payload, check for a duplicate only within the

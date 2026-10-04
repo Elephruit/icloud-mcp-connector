@@ -17,6 +17,7 @@
   },
   "contacts": {
     "enabled": false,
+    "transport": "direct",
     "mode": "allowlist",
     "items": [],
     "accounts": [],
@@ -27,6 +28,12 @@
     "enabled": false,
     "accounts": [],
     "folders": [],
+    "allowWrites": false
+  },
+  "mail": {
+    "enabled": false,
+    "accounts": [],
+    "mailboxes": [],
     "allowWrites": false
   }
 }

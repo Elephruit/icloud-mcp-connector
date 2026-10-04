@@ -1,7 +1,7 @@
 # iCloud MCP Connector fork
 
 > This fork's scoped prototype is defined by [README.md](README.md), these
-> corrected scope rules, [Notes](docs/notes-adapter.md), and
+> corrected scope rules, [Notes](docs/notes-adapter.md), [Mail](docs/mail-adapter.md), and
 > [transport](docs/assistant-transport.md). Preserve upstream MIT copyright and
 > attribution. Use synthetic fixtures and a feature branch; keep personal
 > data, real IDs, private configuration, secrets, and conversations outside Git.
@@ -12,7 +12,7 @@
 > publishing, and imported-memory material below is historical context outside
 > the validated safe interface; it must not broaden these rules.
 
-The current prototype provides scoped Calendar, Reminders, Contacts, and Notes through local stdio MCP. Native Swift CLIs use EventKit/Contacts; the original Notes adapter uses fixed AppleScript plus argv. Mail is excluded from scoped MCP; the inherited standalone Mail CLI and OpenClaw adapter are outside the validated interface. The upstream README is preserved at `docs/upstream-readme.md`.
+The current prototype provides scoped Calendar, Reminders, Contacts, Notes and read-only iCloud Mail through local stdio MCP. Native Swift CLIs use EventKit/Contacts; the original Notes and Mail adapters use fixed scripts plus argv. The inherited standalone Mail CLI and OpenClaw adapter are outside the validated interface. The upstream README is preserved at `docs/upstream-readme.md`.
 
 ## Quick Commands
 
@@ -41,17 +41,30 @@ The scoped MCP validates host-owned configuration in
 `lib/scoped-dispatcher.js` / `lib/connector-policy.js` **before** CLI or Notes
 dispatch. Calendar/Reminders/Contacts CLIs independently enforce scope through
 `PIMConfig`. Notes validates exact account/folder IDs before fixed AppleScript.
+Mail validates exact iCloud account IDs and privately enrolled mailbox paths,
+then performs a nonprompting Automation preflight before fixed read-only JXA.
+Its separate manual permission/enrollment steps are never MCP recovery paths.
 
 MCP uses this checkout's release binaries only, with no `~/.local/bin` fallback
 or automatic upstream helper-app launch. Stdio tests do not establish a cloud
 dot connection; test the actual caller and execution host separately.
+
+The optional native Contacts companion is an explicitly selected host route
+for basic get/create/update. It executes the existing scoped Contacts operations
+inside its own native app identity; it never falls back to the direct host.
+Build/stage it without launching or granting access. Installation, private
+bridge setup and its broader Contacts grant require separate approval. See
+[companion contract](docs/contacts-companion.md). Test only synthetic private
+job fixtures; real jobs and bridge configuration stay outside Git.
 
 ## Repo Layout
 
 | Path | Purpose |
 |------|---------|
 | `lib/` | Shared handler logic, schemas, sanitize (used by both MCP and OpenClaw) |
-| `lib/handlers/` | Scoped calendar, reminder, contact, notes, and runtime handlers; Mail retained outside scoped MCP |
+| `lib/handlers/` | Calendar, reminder, contact, notes and runtime handlers; inherited Mail handler remains outside scoped MCP |
+| `lib/scoped-mail*.js` | Original bounded read-only iCloud Mail adapter and private scope validation |
+| `swift/Sources/MailAccessCLI` | Explicit Mail Automation status/manual permission helper, no message commands |
 | `swift/Sources/PIMConfig` | Shared config library (filtering, profiles, validation) |
 | `swift/Sources/CalendarCLI` | EventKit calendar CLI |
 | `swift/Sources/ReminderCLI` | EventKit reminders CLI |
@@ -104,7 +117,8 @@ replace whole domain sections. Base/profile failures fail closed; no broad
 fallback is permitted. Notes does not support profiles.
 
 Normal native commands check existing grants without prompting. Permission
-requests are explicit CLI `authorize` only, within an approved flow, and are
+requests are explicit CLI `authorize` or Mail `request-authorization` only,
+within an approved flow, and are
 unavailable through MCP. Scoped MCP `apple-pim` exposes runtime `status` and
 `schema` only; it does not query private stores/config, verify TCC/iCloud, or
 establish cloud connection. MCP has no `authorize`, `config_show`, or
@@ -130,7 +144,25 @@ or unsupported rich notes. Concurrent edits and sync remain unverified; verify
 a timed-out write before retrying. `dryRun` validates policy/arguments without
 AppleScript and cannot prove live scope, permission, or support.
 
-## Testing Notes
+### Mail
+
+Original `lib/scoped-mail*.js` implements strictly read-only list/search/get/thread.
+Exact native iCloud account IDs and enrolled hierarchical mailbox selectors are
+mandatory. Mail has no native scripting mailbox ID; derived keys bind account
+and exact path but cannot distinguish deletion/recreation at that same path.
+Writes, marking read, attachment exports, Full Disk Access and credential setup
+are outside the interface. Do not execute the inherited broad Mail CLI.
+
+The checkout's `mail-access-cli status` is a nonprompting preflight. The manual
+`request-authorization` mode and `scripts/enroll-mail-scope.mjs` are separate
+approved setup steps, never MCP recovery. Metadata enrollment reads only approved
+iCloud account names/IDs or explicitly selected mailbox paths and writes outside
+Git. Data calls require separately approved account/mailbox and date bounds.
+Tests use fake Mail collections; live Automation and body/read-status behavior
+remain platform acceptance checks. Thread coverage is bounded and historically
+incomplete, based on RFC links rather than subject matching.
+
+## Testing Notes and Mail
 
 - Keep pure parsing/argument mapping logic extractable and unit tested.
 - PIMConfig tests (`swift/Tests/PIMConfigTests/`) cover filtering logic, config round-trips, profile merging, and security validation.
