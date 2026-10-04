@@ -13,14 +13,17 @@ describe this prototype's approved workflow.
 Upstream already provided local stdio MCP tools. This fork extends that
 foundation with explicit account/resource scopes, write opt-ins, Notes support,
 bounded read-only Mail
-and a Codex plugin package targeted at making these tools useful to dots.
-Direct dot connectivity remains in development: a supported, approved Mac-side
-execution route is required.
+and a local Codex plugin package. The development goal is local stdio MCP
+through approved tasks on a connected Mac, coordinated by a parent assistant.
+The local connector and scope hardening require no external API key or inference
+API calls. Delegation does not add these tools to a cloud dot's direct catalog.
 
 The [staged product roadmap](docs/product-roadmap.md) prioritizes a verified
-assistant route and stable local app identity before new personal-data access.
+route through Mac tasks and stable local app identity before new personal-data
+access.
 An isolated [synthetic connection probe](docs/connection-proof.md) supports
-that first proof. The separate [Mail send foundation](docs/mail-send-foundation.md)
+that first proof. The [installed local health check](docs/local-invocation.md)
+verifies data-free stdio calls and bounded process restart. The separate [Mail send foundation](docs/mail-send-foundation.md)
 and [iMessage preview](docs/imessage-preview.md) are source-only; native sending
 and installed MCP exposure remain disabled.
 

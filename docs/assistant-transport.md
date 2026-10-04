@@ -1,10 +1,16 @@
 # Assistant transport and connection proof
 
-Reviewed against official OpenAI documentation on 2026-10-04. This is a
-configuration and acceptance guide; verify each connection on its actual host.
-No MCP registration, tunnel, credential,
-network listener, persistent service, or macOS permission grant is created by
-this document. Personal-data integration tests need a separately approved scope.
+The development goal is local stdio MCP through approved tasks on a connected
+Mac. The parent assistant coordinates local tasks and reports their results;
+the local task's MCP client runs this connector on the Mac. Local connector
+development and scope hardening require no external API key, inference API
+calls, gateway or API billing setup.
+
+This configuration and acceptance guide retains official documentation reviewed
+on 2026-10-04; verify the actual local client and execution host. It creates no
+server registration, credential, network listener, persistent service or macOS
+permission grant. Personal-data integration tests need a separately approved
+scope. Remote transports appear only in the optional future appendix.
 
 ## What this repository provides
 
@@ -18,7 +24,7 @@ available to the actual process that runs the connector. A cloud Linux copy of
 this repository cannot access this Mac's EventKit, Contacts, or Notes. Passing a
 stdio test proves only that the local protocol path works.
 
-## Recommended first route: local Codex, then dot delegation
+## Development route: local Codex and connected Mac tasks
 
 Local Codex supports stdio MCP servers. Its desktop, CLI, and IDE clients share
 configuration on the same host. Project configuration is supported in a trusted
@@ -65,13 +71,54 @@ Work Sync. Keep the Mac online with the desktop app open; an offline computer
 cannot perform these steps. Supported installed plugins are another separate
 connection. [Dots computer and app documentation](https://learn.chatgpt.com/docs/dots/computers-and-apps)
 
-The lowest-infrastructure first experiment is therefore a dot-delegated local
-Codex task using the scoped local connector. This is an architectural inference,
-not proof that the dot's own tool catalog gains the stdio tools. Test from the
-actual dot conversation and record which local task executed the call. Do not
-describe delegation as a direct cloud MCP connection.
+The parent assistant can coordinate an approved local Work/Codex task that uses
+the scoped connector on the connected Mac. Verify the local task's installed
+tool catalog and an actual synthetic call, then report which task and host
+executed it. The local server's tools do not automatically enter the parent's
+or dot's cloud namespace. Delegation is the route being developed; direct cloud
+MCP access is outside this milestone.
 
-## Direct cloud MCP prototype: Secure MCP Tunnel
+Use the [bounded installed-package health check](local-invocation.md) for
+data-free discovery, runtime status/schema and process restart. Report this
+script-created local client route separately from the host's advertised tools.
+
+## Local connection acceptance checks
+
+1. **Local protocol:** MCP initialization and `tools/list` succeed with the
+   reviewed build. A synthetic fixture call returns the expected marker. Record
+   the transport and build revision; initialization alone is insufficient.
+2. **Scope enforcement:** synthetic fixtures verify missing or malformed
+   configuration, unapproved calendar/list/account identifiers, and delete
+   actions fail closed. A profile error cannot broaden access. Test both the
+   tool path and direct CLI path.
+3. **Actual assistant path:** the intended local client and delegated Mac task
+   discover and call that fixture tool. Record the parent caller, local task and
+   execution host. A shell-only test is not this check, and delegation does not
+   establish direct cloud tool availability.
+4. **Failure behavior:** stopping the approved local process or disconnecting
+   the Mac returns an actionable failure. There is no fallback to unscoped
+   data, fabricated success, or a different installed binary.
+5. **Approved macOS test:** only after approval, identify the exact shared
+   calendar, reminder list, contact container, and Notes account/folder in scope.
+   Resolve ambiguous names deliberately. Agree on the permitted read range and
+   any synthetic write target before requesting permissions or reading data.
+6. **Write proof:** only when separately authorized, review a single synthetic
+   write payload, execute it in the agreed test scope, and read back its result.
+   Deletion stays disabled; any cleanup needing deletion requires authorization.
+
+Until checks 3 and 5 pass for the intended assistant route, report the connector
+as a local prototype with its route through local tasks and personal-data validation
+pending. Local validation does not require any optional remote route below.
+
+## Appendix: optional future remote routes
+
+The following routes are retained for reference and are outside the current
+local development goal. They require a separate choice and setup approval;
+none is a prerequisite for local MCP, connector hardening or delegated Mac
+tasks. Do not create an API key, tunnel, gateway or billing setup to complete
+the local milestone.
+
+### Secure MCP Tunnel
 
 OpenAI now documents Secure MCP Tunnel for local/private stdio or HTTP servers.
 `tunnel-client` opens outbound HTTPS to OpenAI and forwards MCP requests locally;
@@ -128,7 +175,7 @@ and invoke a harmless synthetic tool from that actual dot as the acceptance
 test. If it is unavailable there, retain the documented local-task route and
 report the product/account limitation.
 
-## Alternative: authenticated remote HTTPS adapter
+### Authenticated remote HTTPS adapter
 
 If tunnel support is unavailable, ChatGPT developer mode supports remote MCP
 via SSE or streaming HTTP. OAuth is supported, and write actions normally
@@ -142,29 +189,3 @@ tunnel, and ongoing operation come before this route. No raw stdio-to-public
 proxy is part of the current prototype. A hosted API application would also
 introduce separate API usage and operational costs; check them before choosing
 it. [OpenAI remote MCP guide](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
-
-## Connection acceptance checks
-
-1. **Local protocol:** MCP initialization and `tools/list` succeed with the
-   reviewed build. A synthetic fixture call returns the expected marker. Record
-   the transport and build revision; initialization alone is insufficient.
-2. **Scope enforcement:** synthetic fixtures verify missing or malformed
-   configuration, unapproved calendar/list/account identifiers, and delete
-   actions fail closed. A profile error cannot broaden access. Test both the
-   tool path and direct CLI path.
-3. **Actual assistant path:** the intended local client, delegated local task,
-   or cloud dot discovers and calls that fixture tool. Record the caller and
-   execution host. A shell-only test is not this check.
-4. **Failure behavior:** stopping the approved local process or disconnecting
-   the Mac returns an actionable failure. There is no fallback to unscoped
-   data, fabricated success, or a different installed binary.
-5. **Approved macOS test:** only after approval, identify the exact shared
-   calendar, reminder list, contact container, and Notes account/folder in scope.
-   Resolve ambiguous names deliberately. Agree on the permitted read range and
-   any synthetic write target before requesting permissions or reading data.
-6. **Write proof:** only when separately authorized, review a single synthetic
-   write payload, execute it in the agreed test scope, and read back its result.
-   Deletion stays disabled; any cleanup needing deletion requires authorization.
-
-Until checks 3 and 5 pass for the intended assistant route, report the connector
-as a local prototype with connection and personal-data validation pending.

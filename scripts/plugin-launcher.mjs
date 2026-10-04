@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // iCloud MCP Connector, derived from MIT-licensed Apple PIM and its stdio MCP.
 // Copyright (c) 2025 Omar Shahine; see ../LICENSE.
-import { access, readFile, realpath, stat } from "node:fs/promises";
+import { access, lstat, open, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,6 +17,75 @@ const inside = (root, target) => {
 const exactIDs = (ids) => Array.isArray(ids) && ids.length > 0 && ids.length <= 32 &&
   new Set(ids).size === ids.length && ids.every((id) => typeof id === "string" &&
     id.length > 0 && id.length <= 2048 && id.trim() === id && !/[\u0000-\u001f\u007f*]/u.test(id));
+
+const sameEntry = (left, right) => left.dev === right.dev && left.ino === right.ino;
+const unchangedFile = (left, right) => sameEntry(left, right) && left.size === right.size &&
+  left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+const privateDirectory = (info, uid) => info.isDirectory() && info.uid === uid &&
+  (info.mode & 0o7777n) === 0o700n;
+const privateFile = (info, uid) => info.isFile() && info.uid === uid && info.nlink === 1n &&
+  (info.mode & 0o7777n) === 0o600n && info.size >= 1n && info.size <= BigInt(MAX_CONFIG_BYTES);
+
+async function readPrivateConfig(selectedDirectory, resolvedRoot, { openImpl, getUid }) {
+  const owner = getUid();
+  if (!Number.isInteger(owner) || owner < 0) throw new Error("private owner unavailable");
+  const uid = BigInt(owner);
+  // Strip trailing separators so lstat/O_NOFOLLOW cannot follow a directory
+  // symlink via the trailing slash. System parent aliases such as /tmp remain
+  // supported after canonicalization.
+  let selectedPath = selectedDirectory;
+  while (selectedPath.length > 1 && selectedPath.endsWith(sep)) selectedPath = selectedPath.slice(0, -1);
+  const selectedInfo = await lstat(selectedPath, { bigint: true });
+  if (!privateDirectory(selectedInfo, uid)) throw new Error("private directory requirements");
+  const configDirectory = await realpath(selectedPath);
+  const directoryInfo = await lstat(configDirectory, { bigint: true });
+  const configPath = join(configDirectory, "config.json");
+  const fileInfo = await lstat(configPath, { bigint: true });
+  if (!privateDirectory(directoryInfo, uid) || !sameEntry(selectedInfo, directoryInfo) ||
+      inside(resolvedRoot, configDirectory) || !privateFile(fileInfo, uid)) {
+    throw new Error("private file requirements");
+  }
+
+  let directory, file;
+  try {
+    directory = await openImpl(configDirectory,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_DIRECTORY);
+    const openedDirectory = await directory.stat({ bigint: true });
+    if (!privateDirectory(openedDirectory, uid) || !sameEntry(directoryInfo, openedDirectory)) {
+      throw new Error("private directory changed");
+    }
+    // O_NONBLOCK prevents a substituted FIFO from hanging open; O_NOFOLLOW
+    // rejects a substituted symlink. fstat checks the opened object itself.
+    file = await openImpl(configPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const openedFile = await file.stat({ bigint: true });
+    if (!privateFile(openedFile, uid) || !unchangedFile(fileInfo, openedFile)) {
+      throw new Error("private file changed");
+    }
+    const bytes = Buffer.alloc(MAX_CONFIG_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    const finalFile = await file.stat({ bigint: true });
+    const currentFile = await lstat(configPath, { bigint: true });
+    const currentDirectory = await lstat(configDirectory, { bigint: true });
+    const currentSelected = await lstat(selectedPath, { bigint: true });
+    const finalDirectory = await directory.stat({ bigint: true });
+    if (length < 1 || length > MAX_CONFIG_BYTES || !privateFile(finalFile, uid) ||
+        !privateFile(currentFile, uid) || !unchangedFile(openedFile, finalFile) ||
+        !unchangedFile(openedFile, currentFile) || !privateDirectory(currentDirectory, uid) ||
+        !privateDirectory(currentSelected, uid) || !privateDirectory(finalDirectory, uid) ||
+        !sameEntry(directoryInfo, currentDirectory) || !sameEntry(directoryInfo, currentSelected) ||
+        !sameEntry(directoryInfo, finalDirectory) || await realpath(selectedPath) !== configDirectory) {
+      throw new Error("private configuration changed or oversized");
+    }
+    return { configDirectory, raw: new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length)) };
+  } finally {
+    try { if (file) await file.close(); } finally { if (directory) await directory.close(); }
+  }
+}
 
 export function validatePluginConfig(config) {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -53,33 +122,26 @@ export function validatePluginConfig(config) {
 
 // Validate the host-owned file before loading the server. No directory/file is
 // created, no build/install is run, and no privacy grant or store is queried.
-export async function preparePluginLaunch({ env = process.env, root = packageRoot } = {}) {
+export async function preparePluginLaunch({ env = process.env, root = packageRoot,
+  openImpl = open, getUid = () => process.geteuid?.() } = {}) {
   const selectedDirectory = env.APPLE_PIM_CONFIG_DIR;
   if (typeof selectedDirectory !== "string" || !isAbsolute(selectedDirectory) ||
-      /[\u0000-\u001f\u007f]/u.test(selectedDirectory) || selectedDirectory.includes("${")) {
+      /[\u0000-\u001f\u007f]/u.test(selectedDirectory) || selectedDirectory.includes("${") ||
+      selectedDirectory.split(sep).some((part) => part === "." || part === "..")) {
     throw new Error("Set an absolute private APPLE_PIM_CONFIG_DIR; plugin access is denied.");
   }
   if (env.APPLE_PIM_PROFILE) {
     throw new Error("This local plugin uses base configuration only; remove APPLE_PIM_PROFILE.");
   }
   const resolvedRoot = await realpath(root);
-  let configDirectory, configPath;
+  let configDirectory, raw;
   try {
-    configDirectory = await realpath(selectedDirectory);
-    configPath = await realpath(join(configDirectory, "config.json"));
-    const directoryInfo = await stat(configDirectory);
-    const fileInfo = await stat(configPath);
-    if (!directoryInfo.isDirectory() || !fileInfo.isFile() ||
-        inside(resolvedRoot, configDirectory) || inside(resolvedRoot, configPath) ||
-        !inside(configDirectory, configPath) || fileInfo.size > MAX_CONFIG_BYTES ||
-        (directoryInfo.mode & 0o077) !== 0 || (fileInfo.mode & 0o077) !== 0) throw new Error("private file requirements");
+    ({ configDirectory, raw } = await readPrivateConfig(selectedDirectory, resolvedRoot, { openImpl, getUid }));
   } catch {
-    throw new Error("Private configuration is missing, unsafe or unreadable. Keep an owner-only directory/file outside the plugin; access is denied.");
+    throw new Error("Private configuration is missing, unsafe or unreadable. Keep an owner-only 0700 directory and single-link 0600 file owned by the current user outside the plugin, without directory/config symlinks; access is denied.");
   }
   let config;
   try {
-    const raw = await readFile(configPath, "utf8");
-    if (Buffer.byteLength(raw, "utf8") > MAX_CONFIG_BYTES) throw new Error("oversize");
     config = JSON.parse(raw);
   } catch (error) {
     if (error instanceof SyntaxError) throw new Error("Malformed plugin configuration; access is denied.");

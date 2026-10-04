@@ -4,21 +4,26 @@ The project extends Omar Shahine's MIT-licensed Apple PIM. Preserve its license
 and attribution in source and every future package. Private scopes, credentials,
 PIM records and acceptance receipts stay outside the public repository.
 
-## 1. Prove the assistant route
+## 1. Verify connected Mac tasks using local stdio
 
-Keep the observed connected-Mac/local-task route available. Stage a separate
-stdio server exposing only a synthetic fixture, then test the actual installed
-host and intended dot. Secure MCP Tunnel is the documented private stdio
-candidate; verify target-account access before relying on it. Its pricing is
-unconfirmed. A public plugin instead requires stable HTTPS infrastructure and
-authentication; tunnel testing alone does not satisfy public distribution.
+The development goal is local stdio MCP through approved tasks on the connected
+Mac. The parent assistant coordinates those local tasks and reports their
+results; the task's local MCP client launches the reviewed connector on that
+Mac. A local task can use its installed tools without adding them to the parent
+assistant's or cloud dot's direct tool catalog.
 
-Connection setup needs explicit approval for the official runtime installation,
-tunnel and least-privileged runtime credential, workspace association, developer
-app registration, temporary loopback admin listener and outbound request/data
-processing. Begin with one foreground process and synthetic calls only. Record
-the caller, route, server version and process instance; test stop/restart failure
-and reconnection. Do not infer direct dot access from CLI protocol tests.
+Local connector development and scope hardening require no external API key,
+inference API calls, gateway or API billing setup. Keep the existing local
+client route and private configuration. Server registration, native setup and
+new personal-data access still require their own approved scope.
+
+Use a separate stdio server exposing only a synthetic fixture to verify the
+actual installed local client and a delegated Mac task. Record the caller,
+execution host, task route, server version and process instance; test
+stop/restart failure and reconnection. Shell protocol tests alone cannot prove
+that an assistant's local task can invoke the tool. Optional remote transports
+are future choices described in the [transport appendix](assistant-transport.md#appendix-optional-future-remote-routes),
+with separate setup approval.
 
 ## 2. Establish a stable Mac companion
 
@@ -59,7 +64,9 @@ send adapters.
 ## 4. Verify the installed route
 
 Use synthetic fixtures for protocol, policy, replay, timeouts and recovery.
-Actual installed-client and dot calls must establish their own route. After
+Actual installed-client calls and delegated Mac tasks must establish their route.
+The parent assistant reports which local task performed the operation; delegation
+does not establish direct cloud MCP availability. After
 specific live scope approval, verify one identified artifact and read it back;
 keep local saving separate from iCloud synchronization. Test process restart
 before updates, Mac sleep/wake only with approval for that interruption, and
@@ -77,7 +84,8 @@ Use versioned reproducible staging, native policy tests, protocol/bundle tests,
 companion staging and exact-commit CI. Keep implementation on a feature branch
 until reviewed integration is authorized. Public release, public plugin
 submission, tags, paid services, persistent gateway supervision and production
-hosting each need their own concrete scope approval.
+hosting each need their own concrete scope approval. They are optional future
+work; the local stdio development goal requires no remote gateway or API key.
 
 See [transport](assistant-transport.md), [connection proof](connection-proof.md),
 [Contacts companion](contacts-companion.md), [Mail reads](mail-adapter.md) and

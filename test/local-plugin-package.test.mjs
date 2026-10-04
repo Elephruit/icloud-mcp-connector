@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, copyFile, link, mkdir, mkdtemp, open, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Client } from "../mcp-server/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js";
 import { StdioClientTransport } from "../mcp-server/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js";
 import { preparePluginLaunch, validatePluginConfig } from "../scripts/plugin-launcher.mjs";
@@ -12,6 +14,7 @@ const checkout = fileURLToPath(new URL("..", import.meta.url));
 const loadJSON = async (path) => JSON.parse(await readFile(join(checkout, path), "utf8"));
 const executables = ["calendar-cli", "reminder-cli", "contacts-cli", "notes-access-cli", "mail-access-cli"];
 const validScope = () => ({ enabled: true, mode: "allowlist", items: ["synthetic-resource"], accounts: ["synthetic-account"], allow_writes: false, allow_deletes: false });
+const executeFile = promisify(execFile);
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "icloud-mcp-connector-plugin-synthetic-"));
@@ -28,6 +31,36 @@ async function fixture() {
     await writeFile(join(packageRoot, "swift", ".build", "release", name), "synthetic nonexecuted fixture", { mode: 0o700 });
   }
   return { root, packageRoot, configDirectory, configPath, env: { APPLE_PIM_CONFIG_DIR: configDirectory } };
+}
+
+// A child deadline also bounds a regression that blocks inside open(FIFO).
+// No reader/writer is attached to these synthetic FIFO fixtures.
+async function rejectIsolatedLaunch(f, replacement) {
+  const script = `
+    import assert from "node:assert/strict";
+    import { open, realpath, rename, rm } from "node:fs/promises";
+    import { join } from "node:path";
+    import { preparePluginLaunch } from ${JSON.stringify(new URL("../scripts/plugin-launcher.mjs", import.meta.url).href)};
+    const configDirectory = ${JSON.stringify(f.configDirectory)};
+    const configPath = join(await realpath(configDirectory), "config.json");
+    const replacement = ${JSON.stringify(replacement ?? null)};
+    let replaced = false;
+    await assert.rejects(preparePluginLaunch({
+      env: { APPLE_PIM_CONFIG_DIR: configDirectory }, root: ${JSON.stringify(f.packageRoot)},
+      openImpl: async (path, flags) => {
+        if (replacement && path === configPath && !replaced) {
+          replaced = true;
+          await rm(path);
+          await rename(replacement, path);
+        }
+        return open(path, flags);
+      },
+    }), /unsafe/);
+    assert.equal(replaced, Boolean(replacement));
+  `;
+  await executeFile(process.execPath, ["--input-type=module", "-e", script], {
+    timeout: 3000, killSignal: "SIGKILL", maxBuffer: 4096, env: { PATH: "/usr/bin:/bin", LANG: "C" },
+  });
 }
 
 test("portable manifest and Codex overlay share scoped identity and preserve upstream version", async () => {
@@ -109,7 +142,7 @@ test("launcher rejects broad scopes, wildcard/duplicate IDs and nonboolean flags
 });
 
 test("launcher rejects implicit, relative and unexpanded config and selected profiles", async () => {
-  for (const dir of [undefined, "./private-config", "${PLUGIN_DATA}/private-config", "/synthetic\npath"]) {
+  for (const dir of [undefined, "./private-config", "${PLUGIN_DATA}/private-config", "/synthetic\npath", "/synthetic/./private-config", "/synthetic/../private-config"]) {
     await assert.rejects(preparePluginLaunch({ env: { APPLE_PIM_CONFIG_DIR: dir } }), /absolute private/);
   }
   await assert.rejects(preparePluginLaunch({ env: { APPLE_PIM_CONFIG_DIR: "/synthetic", APPLE_PIM_PROFILE: "assistant" } }), /base configuration only/);
@@ -166,6 +199,166 @@ test("launcher refuses private config inside the package or a config symlink out
     await symlink(join(internal, "config.json"), f.configPath);
     await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot }), /unsafe/);
   } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher refuses config and private-directory symlinks even when their targets are private", async () => {
+  const f = await fixture();
+  try {
+    const target = join(f.configDirectory, "synthetic-target.json");
+    await rename(f.configPath, target);
+    await symlink(target, f.configPath);
+    await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot }), /unsafe/);
+    await rm(f.configPath);
+    await rename(target, f.configPath);
+    const alias = join(f.root, "private-alias");
+    await symlink(f.configDirectory, alias);
+    for (const path of [alias, `${alias}/`]) {
+      await assert.rejects(preparePluginLaunch({ env: { APPLE_PIM_CONFIG_DIR: path }, root: f.packageRoot }), /unsafe/);
+    }
+    await assert.rejects(preparePluginLaunch({ env: { APPLE_PIM_CONFIG_DIR: `${alias}/.` }, root: f.packageRoot }), /absolute private/);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher refuses a config hard link with an alias outside the private directory", async () => {
+  const f = await fixture();
+  try {
+    const alias = join(f.root, "synthetic-unprotected-config.json");
+    await link(f.configPath, alias);
+    await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot }), /single-link/);
+    await rm(alias);
+    await preparePluginLaunch({ env: f.env, root: f.packageRoot });
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher checks the process owner and opened-file owner before reading configuration", async () => {
+  const f = await fixture();
+  let reads = 0, closed = false;
+  try {
+    for (const owner of [undefined, -1, process.geteuid() + 1]) {
+      await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot, getUid: () => owner }), /current user/);
+    }
+    const configPath = join(await realpath(f.configDirectory), "config.json");
+    await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot,
+      openImpl: async (path, flags) => {
+        const handle = await open(path, flags);
+        if (path !== configPath) return handle;
+        return {
+          stat: async (options) => { const info = await handle.stat(options); info.uid += 1n; return info; },
+          read: async (...args) => { reads++; return handle.read(...args); },
+          close: async () => { closed = true; await handle.close(); },
+        };
+      },
+    }), /current user/);
+    assert.equal(reads, 0);
+    assert.equal(closed, true);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher requires exact private modes rather than owner-only executable or read-only files", async () => {
+  const f = await fixture();
+  try {
+    for (const mode of [0o400, 0o700]) {
+      await chmod(f.configPath, mode);
+      await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot }), /0600/);
+    }
+    await chmod(f.configPath, 0o600);
+    await chmod(f.configDirectory, 0o500);
+    await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot }), /0700/);
+  } finally {
+    await chmod(f.configDirectory, 0o700);
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("launcher rejects FIFO config without blocking", { timeout: 5000 }, async () => {
+  const f = await fixture();
+  try {
+    await rm(f.configPath);
+    await executeFile("/usr/bin/mkfifo", ["-m", "600", f.configPath]);
+    await rejectIsolatedLaunch(f);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher rejects FIFO, symlink and regular-file substitutions between inspection and open", { timeout: 12000 }, async (t) => {
+  for (const kind of ["FIFO", "symlink", "regular file"]) {
+    await t.test(kind, async () => {
+      const f = await fixture();
+      try {
+        const replacement = join(f.configDirectory, "synthetic-replacement");
+        if (kind === "FIFO") {
+          await executeFile("/usr/bin/mkfifo", ["-m", "600", replacement]);
+        } else if (kind === "symlink") {
+          const target = join(f.configDirectory, "synthetic-target.json");
+          await writeFile(target, "{}", { mode: 0o600 });
+          await symlink(target, replacement);
+        } else {
+          await writeFile(replacement, JSON.stringify({ contacts: { enabled: false, transport: "companion" } }), { mode: 0o600 });
+        }
+        await rejectIsolatedLaunch(f, replacement);
+      } finally { await rm(f.root, { recursive: true, force: true }); }
+    });
+  }
+});
+
+test("launcher rejects a directory replaced after its descriptor is opened", async () => {
+  const f = await fixture();
+  let replaced = false;
+  try {
+    const configDirectory = await realpath(f.configDirectory);
+    const configPath = join(configDirectory, "config.json");
+    await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot,
+      openImpl: async (path, flags) => {
+        if (path === configPath) {
+          await rename(configDirectory, `${configDirectory}-old`);
+          await mkdir(configDirectory, { mode: 0o700 });
+          await writeFile(configPath, "{}", { mode: 0o600 });
+          replaced = true;
+        }
+        return open(path, flags);
+      },
+    }), /unsafe/);
+    assert.equal(replaced, true);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("launcher bounds growth and rejects same-inode changes during its descriptor read", async (t) => {
+  for (const kind of ["growth", "same-size change"]) {
+    await t.test(kind, async () => {
+      const f = await fixture();
+      let changed = false, largestRead = 0, closed = false;
+      try {
+        const original = JSON.stringify({ notes: { enabled: false, allowWrites: false } });
+        await writeFile(f.configPath, original);
+        const configPath = join(await realpath(f.configDirectory), "config.json");
+        await assert.rejects(preparePluginLaunch({ env: f.env, root: f.packageRoot,
+          openImpl: async (path, flags) => {
+            const handle = await open(path, flags);
+            if (path !== configPath) return handle;
+            return {
+              stat: handle.stat.bind(handle),
+              read: async (...args) => {
+                largestRead = Math.max(largestRead, args[0].length);
+                if (kind === "growth" && !changed) {
+                  changed = true;
+                  await writeFile(configPath, " ".repeat(128 * 1024));
+                }
+                const result = await handle.read(...args);
+                if (kind === "same-size change" && !changed) {
+                  changed = true;
+                  await writeFile(configPath, original.replace('"allowWrites":false', '"allowWrites":true '));
+                }
+                return result;
+              },
+              close: async () => { closed = true; await handle.close(); },
+            };
+          },
+        }), /unsafe/);
+        assert.equal(changed, true);
+        assert.equal(closed, true);
+        assert.ok(largestRead > 0 && largestRead <= 65537);
+      } finally { await rm(f.root, { recursive: true, force: true }); }
+    });
+  }
 });
 
 test("launcher refuses missing binaries and installed-binary fallback symlinks", async () => {
