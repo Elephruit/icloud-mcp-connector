@@ -27,8 +27,11 @@ request, not proof that a dialog appeared. Only `authorized: true` confirms a
 grant. MCP never invokes this mode or changes System Settings.
 
 Next obtain approval to read only iCloud account names and native IDs. The
-manual helper explicitly selects Mail's `iCloudAccounts` collection, excluding
-other providers. It saves metadata privately and prints only a count/receipt:
+manual helper uses fixed typed AppleScript to select only accounts whose native
+account type is `iCloud`, then verifies that type before reading names/IDs. Mail's
+declared iCloud-class collection is not usable on every version, and JXA cannot
+reliably coerce that enum in a predicate. No generic account enumeration is used.
+The helper saves metadata privately and prints only a count/receipt:
 
 ```sh
 node scripts/enroll-mail-scope.mjs --mode metadata-account --bin-dir /absolute/checkout/swift/.build/release --output /absolute/private/new-account-metadata.json
@@ -49,6 +52,9 @@ node scripts/enroll-mail-scope.mjs --mode select-mailboxes --bin-dir /absolute/c
 `INBOX` is an example, not a fallback or assumed localized name. Each path
 contains 1–8 exact ordered components. Missing/duplicate matches fail closed.
 Account IDs and selected paths remain outside the public repository.
+Mailbox enrollment and runtime reads select only the exact enrolled account ID
+through JXA and recheck its iCloud type before reading any mailbox or message
+fields. They never fall back to a broader account query.
 
 After separate persistent-scope approval, copy only the selected records into
 the host's private `config.json`:

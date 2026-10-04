@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { deriveMailMailboxId } from "../lib/scoped-mail-config.js";
+import { MAIL_ACCOUNT_METADATA_APPLESCRIPT } from "../lib/scoped-mail-metadata-script.js";
 import {
   buildMailEnrollmentArguments,
   enrollMailScope,
@@ -40,25 +41,26 @@ function fakeChild() {
 
 function fakeMail({ accounts, running = true }) {
   const calls = [];
-  const accountCollection = () => { calls.push("iCloudAccounts"); return accounts; };
-  accountCollection.whose = ({ id }) => () => {
-    calls.push("iCloudAccounts.whose");
-    return accounts.filter((account) => account.id() === id);
+  const accountCollection = () => { throw new Error("Unfiltered account enumeration forbidden"); };
+  accountCollection.whose = (predicate) => () => {
+    assert.deepEqual(Object.keys(predicate), ["id"]); assert.equal(predicate.id, accountId);
+    calls.push("accounts.whose.exactID");
+    return accounts.filter((account) => account.selectedNativeID === predicate.id);
   };
-  const mail = { running: () => running, iCloudAccounts: accountCollection };
-  for (const forbidden of ["accounts", "messages", "inbox", "activate", "launch"]) Object.defineProperty(mail, forbidden, { get() { throw new Error("Forbidden Mail property: " + forbidden); } });
+  const mail = { running: () => running, accounts: accountCollection };
+  for (const forbidden of ["iCloudAccounts", "messages", "inbox", "activate", "launch"]) Object.defineProperty(mail, forbidden, { get() { throw new Error("Forbidden Mail property: " + forbidden); } });
   return { mail, calls };
 }
 
-function nativeAccount(id, name, trees = []) {
-  const account = { id: () => id, name: () => name };
+function nativeAccount(id, name, trees = [], provider = "iCloud") {
+  const account = { selectedNativeID: id, accountType: () => provider, id: () => id, name: () => name };
   function collection(nodes) {
     const value = () => { throw new Error("Unfiltered mailbox discovery is forbidden"); };
     value.whose = ({ name: selectedName }) => () => nodes.filter((node) => node.name().toLowerCase() === selectedName.toLowerCase());
     return value;
   }
   function mailbox(node) {
-    const value = { name: () => node.name, account: () => node.wrongAccount ? { id: () => "OUTSIDE" } : account, mailboxes: collection((node.children ?? []).map(mailbox)) };
+    const value = { name: () => node.name, account: () => node.wrongAccount ? { accountType: () => "iCloud", id: () => "OUTSIDE" } : account, mailboxes: collection((node.children ?? []).map(mailbox)) };
     for (const forbidden of ["messages", "unreadCount", "messageCount", "source", "content", "allHeaders"]) Object.defineProperty(value, forbidden, { get() { throw new Error("Forbidden mailbox data: " + forbidden); } });
     return value;
   }
@@ -93,19 +95,21 @@ test("CLI rejects unknown/duplicate flags and preserves ordered JSON paths as da
   for (const args of [["--mode", "metadata-account", "--mode", "metadata-account"], ["--mode", "metadata-account", "--authorize"], ["--mode", "select-mailboxes", "--mailbox-path-json", "SYNTHETIC_PRIVATE_BAD_JSON"]]) assert.throws(() => parseMailEnrollmentCLI(args), (error) => !error.message.includes("SYNTHETIC_PRIVATE_BAD_JSON"));
 });
 
-test("fixed JXA account metadata accesses only iCloud id/name and no personal content", () => {
+test("fixed typed AppleScript metadata filters iCloud natively; JXA cannot discover accounts", () => {
+  assert.match(MAIL_ACCOUNT_METADATA_APPLESCRIPT, /get every account whose account type is iCloud/u);
+  assert.match(MAIL_ACCOUNT_METADATA_APPLESCRIPT, /account type of cloudAccountRef\) is not iCloud/u);
+  assert.ok(MAIL_ACCOUNT_METADATA_APPLESCRIPT.indexOf('set stageLabel to "accountType"') < MAIL_ACCOUNT_METADATA_APPLESCRIPT.indexOf("get id of cloudAccountRef"));
+  assert.ok(!/messages|email addresses|password|user name|activate|do shell script/u.test(MAIL_ACCOUNT_METADATA_APPLESCRIPT));
   const fixture = fakeMail({ accounts: [nativeAccount(accountId, "Synthetic iCloud")] });
-  assert.deepEqual(executeSyntheticJXA(accountArgs, fixture), accountsResult);
-  assert.deepEqual(fixture.calls, ["iCloudAccounts"]);
-  const empty = fakeMail({ accounts: [] });
-  assert.deepEqual(executeSyntheticJXA(accountArgs, empty).accounts, []);
+  assert.throws(() => executeSyntheticJXA(accountArgs, fixture), /typed AppleScript/);
+  assert.deepEqual(fixture.calls, []);
 });
 
 test("fixed JXA resolves exact paths level by level without recursive or global fallback", () => {
   const account = nativeAccount(accountId, "Synthetic iCloud", [{ name: "Agent", children: [{ name: "Synthetic Inbox" }] }, { name: "Synthetic Inbox" }]);
   const fixture = fakeMail({ accounts: [account, nativeAccount("OUTSIDE", "Outside")] });
   assert.deepEqual(executeSyntheticJXA(mailboxArgs, fixture), mailboxesResult);
-  assert.deepEqual(fixture.calls, ["iCloudAccounts.whose"]);
+  assert.deepEqual(fixture.calls, ["accounts.whose.exactID"]);
   assert.throws(() => executeSyntheticJXA(buildMailEnrollmentArguments({ mode: "select-mailboxes", accountId, mailboxPaths: [["Missing", "Synthetic Inbox"]] }), fixture), /missing or ambiguous/);
 });
 
@@ -119,7 +123,7 @@ test("fixed JXA refuses missing, duplicate, case-mismatched and cross-account ma
 
 test("fixed JXA checks running status before any metadata query", () => {
   const fixture = fakeMail({ accounts: [], running: false });
-  assert.throws(() => executeSyntheticJXA(accountArgs, fixture), /already be running/);
+  assert.throws(() => executeSyntheticJXA(mailboxArgs, fixture), /already be running/);
   assert.deepEqual(fixture.calls, []);
 });
 
@@ -153,6 +157,22 @@ test("runner sends a fixed source via stdin and selectors via argv with no shell
   child.stdout.emit("data", JSON.stringify(mailboxesResult));
   child.emit("close", 0);
   assert.equal((await promise).mailboxes[0].id, deriveMailMailboxId(accountId, path));
+});
+
+test("metadata runner selects only the fixed typed AppleScript with zero caller argv", async () => {
+  const child = fakeChild(); let captured;
+  const promise = runMailEnrollmentScript(accountArgs, { platform: "darwin", preflightImpl: approvedPreflight, spawnImpl: (...args) => { captured = args; return child; } });
+  await Promise.resolve();
+  assert.equal(captured[0], "/usr/bin/osascript"); assert.deepEqual(captured[1], ["-"]);
+  assert.equal(child.source, MAIL_ACCOUNT_METADATA_APPLESCRIPT);
+  child.stdout.emit("data", JSON.stringify(accountsResult)); child.emit("close", 0);
+  assert.deepEqual((await promise).accounts, accountsResult.accounts);
+});
+
+test("selected account provider denial precedes IDs/names/mailboxes", () => {
+  const account = nativeAccount(accountId, "Forbidden", [], "imap");
+  for (const field of ["id", "name", "mailboxes"]) Object.defineProperty(account, field, { get() { throw new Error("UNAPPROVED_PROVIDER_FIELD"); } });
+  assert.throws(() => executeSyntheticJXA(mailboxArgs, fakeMail({ accounts: [account] })), /provider is not iCloud/);
 });
 
 test("runner bounds stdout/stderr and timeout without exposing diagnostics", async () => {

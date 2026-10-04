@@ -23,7 +23,7 @@ const getArgs = { action: "get", accountId, mailboxId: inbox.id, id: "1" };
 function collection(items) {
   const getter = () => items;
   getter.whose = (predicate) => () => items.filter((item) => Object.entries(predicate).every(([field, expected]) => {
-    const actual = item[field]();
+    const actual = field === "name" && item.nativeName !== undefined ? item.nativeName : item[field]();
     if (field === "dateReceived") return actual.getTime() >= expected[">="].getTime();
     // Native name comparisons can be insensitive; the fixed script rechecks.
     return typeof actual === "string" && typeof expected === "string" ? actual.toLowerCase() === expected.toLowerCase() : actual === expected;
@@ -46,14 +46,33 @@ function message(id, rfcId, options = {}) {
   return { native: Object.freeze(properties), state };
 }
 
-function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, icloud = true, configuration = mail } = {}) {
+function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, icloud = true, wrongMailboxOwner, configuration = mail } = {}) {
   const seed = message(1, "root@example.com"), reply = message(2, "reply@example.com", { reference: "root@example.com", date: "2026-10-04T10:00:00Z" }), unrelated = message(3, "unrelated@example.com");
   const inboxRows = rows ?? [seed, unrelated];
-  const mailbox = (name, data) => Object.freeze({ name: () => name, messages: collection(data.map((entry) => entry.native)), mailboxes: collection([]) });
+  const wrongOwner = wrongMailboxOwner && {
+    accountType: () => wrongMailboxOwner.provider,
+    id: () => { if (wrongMailboxOwner.provider !== "iCloud") throw new Error("UNAPPROVED_OWNER_ID"); return wrongMailboxOwner.id; },
+  };
+  const mailbox = (name, data) => Object.freeze({
+    nativeName: name,
+    account: () => wrongOwner ?? account,
+    name: () => { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_NAME"); return name; },
+    get messages() { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_MESSAGES"); return collection(data.map((entry) => entry.native)); },
+    get mailboxes() { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_CHILDREN"); return collection([]); },
+  });
   const inboxBox = mailbox(inboxName, inboxRows), sentBox = mailbox("Sent", [reply]);
   const boxes = duplicateInbox ? [inboxBox, inboxBox, sentBox] : [inboxBox, sentBox];
-  const account = Object.freeze({ id: () => accountId, mailboxes: collection(boxes) });
-  const nativeMail = Object.freeze({ running: () => true, iCloudAccounts: collection(icloud ? [account] : []) });
+  const account = Object.freeze({
+    id: () => { if (!icloud) throw new Error("UNAPPROVED_PROVIDER_ID"); return accountId; },
+    accountType: () => icloud ? "iCloud" : "imap",
+    get mailboxes() { if (!icloud) throw new Error("UNAPPROVED_PROVIDER_MAILBOXES"); return collection(boxes); },
+  });
+  const accountCollection = () => { throw new Error("Unfiltered accounts enumeration is forbidden"); };
+  accountCollection.whose = (predicate) => {
+    assert.deepEqual(Object.keys(predicate), ["id"]); assert.equal(predicate.id, accountId);
+    return () => predicate.id === accountId ? [account] : [];
+  };
+  const nativeMail = Object.freeze({ running: () => true, accounts: accountCollection });
   const scriptContext = { Application: (path) => { assert.equal(path, "/System/Applications/Mail.app"); return nativeMail; }, Date, Set, JSON };
   const calls = [];
   const runScript = async (payload) => {
@@ -98,13 +117,22 @@ test("date window, query, IDs and limits remain bounded and validated before exe
   for (const args of [{ ...listArgs, since: "2026-08-01T12:00:00Z" }, { ...listArgs, since: "2026-10-05T12:00:00Z" }, { ...listArgs, since: "2026-02-30T12:00:00Z" }, { ...listArgs, limit: 51 }, { ...listArgs, limit: 0 }, { ...getArgs, id: "01" }, { ...getArgs, id: "1; script" }, { ...getArgs, id: "9007199254740992" }, { ...listArgs, action: "search", query: " " }, { ...listArgs, action: "search", query: "x".repeat(2049) }]) assert.throws(() => buildMailInvocation(args, config, now));
 });
 
-test("native scope resolution uses iCloud-only exact account/path and refuses case drift/duplicates", async () => {
-  for (const options of [{ icloud: false }, { inboxName: "inbox" }, { duplicateInbox: true }]) await assert.rejects(nativeFixture(options).runMail(listArgs), /missing or ambiguous/);
+test("native scope resolution uses exact account ID and iCloud provider before exact path; no broad fallback", async () => {
+  for (const options of [{ icloud: false }, { inboxName: "inbox" }, { duplicateInbox: true }]) await assert.rejects(nativeFixture(options).runMail(listArgs), /missing or ambiguous|provider is not iCloud/);
   const fixture = nativeFixture();
   const listed = await fixture.runMail(listArgs);
   assert.equal(listed.messages.length, 2);
   assert.ok(listed.messages.every((entry) => entry.mailboxId === inbox.id && entry.accountId === accountId));
   assert.equal(fixture.seed.state.bodiesRead + fixture.unrelated.state.bodiesRead + fixture.reply.state.bodiesRead, 0);
+});
+
+test("each mailbox owner is verified before name, children or message getters", async () => {
+  for (const wrongMailboxOwner of [{ provider: "iCloud", id: "foreign-account" }, { provider: "imap", id: "foreign-account" }]) {
+    const fixture = nativeFixture({ wrongMailboxOwner });
+    for (const args of [listArgs, getArgs, { ...getArgs, action: "thread" }]) await assert.rejects(fixture.runMail(args), /mailbox provider is not iCloud|mailbox owner does not match/);
+    assert.equal(fixture.seed.state.protectedReads + fixture.reply.state.protectedReads + fixture.unrelated.state.protectedReads, 0);
+    assert.equal(fixture.seed.state.bodiesRead + fixture.reply.state.bodiesRead + fixture.unrelated.state.bodiesRead, 0);
+  }
 });
 
 test("subject/sender search keeps code-like queries as data and never reads bodies", async () => {

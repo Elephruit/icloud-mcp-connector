@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { deriveMailMailboxId } from "../lib/scoped-mail-config.js";
 import { checkMailAccess } from "../lib/scoped-mail.js";
+import { MAIL_ACCOUNT_METADATA_APPLESCRIPT } from "../lib/scoped-mail-metadata-script.js";
 import { spawnProcess } from "../lib/safe-shell.js";
 
 const MAX_ACCOUNTS = 32;
@@ -54,8 +55,7 @@ export const MAIL_ENROLLMENT_JXA = String.raw`function run(argv) {
   const mode = argv[0];
   const accountId = argv[1];
   const paths = JSON.parse(argv[2]);
-  if (mode !== 'metadata-account' && mode !== 'select-mailboxes') throw new Error('Unsupported enrollment mode');
-  if (mode === 'metadata-account' && (accountId !== '' || !Array.isArray(paths) || paths.length !== 0)) throw new Error('Invalid account metadata scope');
+  if (mode !== 'select-mailboxes') throw new Error('Account metadata requires the fixed typed AppleScript route');
   if (mode === 'select-mailboxes') {
     exactText(accountId);
     if (!Array.isArray(paths) || paths.length < 1 || paths.length > 16) throw new Error('Explicit mailbox paths are required');
@@ -70,22 +70,10 @@ export const MAIL_ENROLLMENT_JXA = String.raw`function run(argv) {
   }
   const Mail = Application('/System/Applications/Mail.app');
   if (!Mail.running()) throw new Error('Mail must already be running');
-  if (mode === 'metadata-account') {
-    const nativeAccounts = Mail.iCloudAccounts();
-    if (nativeAccounts.length > 32) throw new Error('Account metadata limit exceeded');
-    const accounts = [];
-    const seenIds = Object.create(null);
-    for (let i = 0; i < nativeAccounts.length; i++) {
-      const id = exactText(nativeAccounts[i].id());
-      if (seenIds[id]) throw new Error('Ambiguous account ID');
-      seenIds[id] = true;
-      accounts.push({ id: id, name: exactText(nativeAccounts[i].name()), provider: 'iCloud' });
-    }
-    return JSON.stringify({ success: true, target: 'com.apple.mail', mode: mode, accounts: accounts });
-  }
-  const accountCandidates = Mail.iCloudAccounts.whose({ id: accountId })();
+  const accountCandidates = Mail.accounts.whose({ id: accountId })();
   const exactAccounts = [];
   for (let i = 0; i < accountCandidates.length; i++) {
+    if (accountCandidates[i].accountType() !== 'iCloud') throw new Error('Exact account provider is not iCloud');
     if (accountCandidates[i].id() === accountId) exactAccounts.push(accountCandidates[i]);
   }
   if (exactAccounts.length !== 1) throw new Error('Exact iCloud account is missing or ambiguous');
@@ -101,7 +89,9 @@ export const MAIL_ENROLLMENT_JXA = String.raw`function run(argv) {
       }
       if (exactMatches.length !== 1) throw new Error('Exact mailbox path is missing or ambiguous');
       parent = exactMatches[0];
-      if (parent.account().id() !== accountId) throw new Error('Mailbox account mismatch');
+      const mailboxAccount = parent.account();
+      if (mailboxAccount.accountType() !== 'iCloud') throw new Error('Mailbox provider mismatch');
+      if (mailboxAccount.id() !== accountId) throw new Error('Mailbox account mismatch');
     }
     if (targetAccount.id() !== accountId || parent.name() !== paths[p][paths[p].length - 1]) throw new Error('Mailbox selector changed');
     mailboxes.push({ accountId: accountId, path: paths[p] });
@@ -155,9 +145,13 @@ export async function runMailEnrollmentScript(argv, {
   // No inherited credentials, dynamic-loader variables, proxy settings or private config.
   const nativeEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", HOME: nativeHome };
   await preflightImpl({ accessCliPath, spawnImpl, platform });
+  // JXA cannot reliably coerce Mail's TypeOfAccount enum in a whose predicate.
+  // Account discovery uses the reviewed typed iCloud-only AppleScript request.
+  const nativeArgs = argv[0] === "metadata-account" ? ["-"] : ["-l", "JavaScript", "-", ...argv];
+  const nativeSource = argv[0] === "metadata-account" ? MAIL_ACCOUNT_METADATA_APPLESCRIPT : MAIL_ENROLLMENT_JXA;
   return await new Promise((resolvePromise, reject) => {
     let child;
-    try { child = spawnImpl("/usr/bin/osascript", ["-l", "JavaScript", "-", ...argv], { shell: false, stdio: ["pipe", "pipe", "pipe"], env: nativeEnv }); }
+    try { child = spawnImpl("/usr/bin/osascript", nativeArgs, { shell: false, stdio: ["pipe", "pipe", "pipe"], env: nativeEnv }); }
     catch { reject(new Error("Could not launch Mail metadata enrollment")); return; }
     let output = "", outputBytes = 0, stderrBytes = 0, settled = false, killTimer;
     const fail = (message, kill = false) => {
@@ -197,7 +191,7 @@ export async function runMailEnrollmentScript(argv, {
         resolvePromise(metadata);
       } catch { fail("Mail enrollment returned an invalid response"); }
     });
-    try { child.stdin.end(MAIL_ENROLLMENT_JXA); }
+    try { child.stdin.end(nativeSource); }
     catch { fail("Could not send the fixed Mail enrollment script", true); }
   });
 }
