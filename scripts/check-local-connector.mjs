@@ -9,9 +9,10 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 export const HEALTH_TOOLS = Object.freeze(["apple-pim", "calendar", "contact", "mail", "notes", "reminder"]);
-// Reviewed installed 0.2.1 artifacts. Unknown packages must be reviewed first.
+// Reviewed 0.2.1 runtime artifacts from source commit 33729a5.
+// Unknown packages must be reviewed first, including same-version changes.
 const REVIEWED = Object.freeze({
-  "scripts/plugin-launcher.mjs": "e6cde3facba9406bd877a1360c11fd19b7f6262306e5135224bf85cca19d19ad",
+  "scripts/plugin-launcher.mjs": "ba0277f30e75ccfbb634a46631fa82a311f07b13a2297230ddc40061778d6abb",
   "mcp-server/dist/server.js": "daba5100907dcd44162c513c83c383e8e7d7a80faaa5ff665dd621bb844c0bf7",
   "lib/scoped-mail-config.js": "6b5596c782a53d3a4acb4b013412f4f718c6d3367d550bbf489ba18cc3330dde",
 });

@@ -16,7 +16,10 @@ node scripts/check-local-connector.mjs \
 ```
 
 Both locations must be explicit. The helper validates owner-controlled package
-paths and the reviewed 0.2.1 launcher/server/library hashes. Unknown versions or
+paths and the reviewed 0.2.1 launcher/server/library hashes from
+[source commit 33729a5](https://github.com/Elephruit/icloud-mcp-connector/commit/33729a52a963b3ee692bf7661f221804701cf530).
+The version alone is insufficient: a same-version package with different
+reviewed launcher/server/library bytes also fails verification. Unknown versions or
 changed artifacts fail before execution and need a new source review. Config
 must be an owner-owned 0700 directory outside Git and outside the package, with
 a regular, single-link, owner-owned 0600 `config.json`. The helper inspects only
