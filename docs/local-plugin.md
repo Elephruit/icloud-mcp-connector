@@ -18,17 +18,20 @@ does not install binaries, launch the inherited helper app, start a daemon,
 listen on a port, request privacy permissions or create configuration. Missing
 builds or private configuration stop startup.
 
-The source package has been tested with a temporary stdio client, disabled
-synthetic configuration, tool discovery, runtime status and denied calls. It
-has **not** been installed or enabled in the host plugin catalog. Those protocol
-checks do not prove installation, live access or cloud availability.
+The source package is tested with a temporary stdio client, disabled synthetic
+configuration, tool discovery, runtime status and denied calls. Installation
+and permissions belong to each owner's host. Verify the installed package and
+an actual host invocation separately; source protocol checks do not establish
+live access or cloud availability.
 
 ## Build and stage before installation
 
 Review the checkout and dependency manifests first. On the target Mac, build
 the native tools and the bundled Node server using the repository's documented
 build commands. Do not use `setup.sh`: the upstream script can install binaries
-and a helper app, which this package does not need.
+and a helper app. The direct launcher instead relies on the actual host's
+existing framework grants. A separate app's Contacts grant does not prove that
+the direct host process has Contacts access.
 
 An installed local plugin runs from a cached package copy. Source Git does not
 contain the ignored Swift build outputs, and installing a source-only checkout
@@ -91,20 +94,35 @@ approval, put the staged package at that location and place the catalog at the
 marketplace root's `.agents/plugins/marketplace.json`. The entry is available
 for user installation; it does not install the plugin by default.
 
-The installed CLI's read-only help was checked on Codex `0.155.1`. It supports:
+The ChatGPT desktop app's bundled CLI was checked on
+`0.159.0-alpha.12.1`. A `codex` found on the shell PATH can be a different,
+older installation. Use the matching desktop binary for host setup:
 
 ```sh
-codex plugin marketplace add /absolute/path/to/marketplace-root
-codex plugin add icloud-mcp-connector@icloud-mcp-connector-local
+/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex plugin marketplace add /absolute/path/to/marketplace-root
+/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex plugin add icloud-mcp-connector@icloud-mcp-connector-local
 ```
 
-These are setup instructions, not commands run for this checkpoint. Installation
-persists the package and can cause an MCP process to start in future supported
-local sessions. Review and approve that scope before executing them. Then check
-the host's plugin/MCP view and call `apple-pim` with `action: "status"`. Confirm
-the expected five tools: `apple-pim`, `calendar`, `reminder`, `contact`, `notes`.
-Keep tool approval set to `prompt`; each domain tool combines reads and writes.
-Do not treat successful status as evidence that any personal data is enabled.
+These commands persist the package and can cause an MCP process to start in
+future supported local sessions. Review and approve that scope before executing
+them. Preserve unrelated user configuration. Initially keep the private example
+disabled and restrict the plugin to runtime status/schema with per-call approval:
+
+```toml
+[plugins."icloud-mcp-connector@icloud-mcp-connector-local".mcp_servers."icloud-mcp-connector"]
+enabled = true
+default_tools_approval_mode = "prompt"
+enabled_tools = ["apple-pim"]
+```
+
+`plugin list --json` verifies installation metadata; `mcp list --json` verifies
+the resolved command, package root and `PLUGIN_DATA`. Neither invokes the tool.
+Check the actual host's MCP view and call `apple-pim` with `action: "status"`.
+The server implements five tools: `apple-pim`, `calendar`, `reminder`, `contact`
+and `notes`; the initial client policy exposes only `apple-pim`. Enabling domain
+tools and adding private scopes require the owner's approved targets. Keep tool
+approval at `prompt`, since each domain tool combines reads and writes. Status
+does not prove personal-data grants, iCloud sync or direct cloud connectivity.
 
 OpenAI documents portable manifests, compatibility overlays, local marketplaces
 and plugin-specific MCP approval settings. Host surfaces may differ. Confirm
@@ -129,6 +147,14 @@ what the prompt shows rather than assuming it names this package. Notes must
 already be running. Its preflight never grants Automation access. Permission
 requests are a separate approved local setup step, not a tool-call recovery.
 
+Contacts acceptance under a temporary app tests that app's process chain only.
+It does not transfer permission to a separately launched plugin under
+ChatGPT/Codex/Node. For an approved app-identity test, use a native Mach-O main
+executable and an explicit Contacts usage description; shell-script main
+executables can break macOS privacy attribution. A runtime companion app is a
+separate design and permission decision, not an automatic recovery step.
+[Apple's native-executable and responsible-code guidance](https://developer.apple.com/forums/thread/678819)
+
 For each live write, preview the payload, check for a duplicate only within the
 approved scope, create/update one synthetic artifact and read it back by exact
 identity. Leave artifacts clearly labeled unless the user approves their
@@ -146,7 +172,8 @@ stdio process or privacy grants available there. The existing delegated local
 task route can invoke this connector on the connected Mac; direct cloud MCP is
 separate work. See [transport routes and approvals](assistant-transport.md).
 
-This checkpoint does not upload a plugin to an account, register persistent
-access, deploy a service or submit to the public directory. A public directory
-release has separate endpoint/support and review requirements; the source
-package is for local authoring and later reviewed distribution.
+Local installation creates persistent registration only on the approved host. It
+does not upload a plugin to an account, deploy a service or submit to the public
+directory. A public directory release has separate endpoint/support and review
+requirements; the source package supports local authoring and reviewed
+distribution.

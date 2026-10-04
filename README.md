@@ -115,8 +115,9 @@ The source includes a portable `icloud-mcp-connector` plugin package with a guar
 stdio launcher, disabled configuration example and Codex compatibility manifest.
 See [local plugin setup](docs/local-plugin.md) for staging reviewed binaries,
 private host configuration and the separately approved installation flow.
-The package is not installed, and local protocol checks do not establish a
-direct ChatGPT cloud connection.
+Installation and permissions must be verified on each owner's host. A local
+plugin runtime check does not establish a direct ChatGPT cloud connection or
+personal-data access.
 
 ## Local validation
 

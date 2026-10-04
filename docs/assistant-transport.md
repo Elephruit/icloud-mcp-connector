@@ -1,7 +1,8 @@
 # Assistant transport and connection proof
 
-Reviewed against official OpenAI documentation on 2026-10-03. This is a proposed
-runbook, not an installed connection. No MCP registration, tunnel, credential,
+Reviewed against official OpenAI documentation on 2026-10-03. This is a
+configuration and acceptance guide; verify each connection on its actual host.
+No MCP registration, tunnel, credential,
 network listener, persistent service, or macOS permission grant is created by
 this document. Personal-data integration tests need a separately approved scope.
 
