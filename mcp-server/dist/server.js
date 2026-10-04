@@ -17114,6 +17114,7 @@ function markToolResult(result, toolName) {
     if (marked.title !== void 0 || marked.text !== void 0) return markItem(marked, "note");
   }
   if (toolName === "mail") {
+    if (marked.message) marked.message = markItem(marked.message, "mail");
     if (marked.messages && Array.isArray(marked.messages)) {
       marked.messages = marked.messages.map((m) => markItem(m, "mail"));
     }
