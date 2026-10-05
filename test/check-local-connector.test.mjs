@@ -12,17 +12,18 @@ const options = { packageRoot: "/synthetic/package", configDirectory: "/syntheti
 const status = { connector: "icloud-mcp-connector", transport: "stdio", contactsTransport: "direct", deletionDefault: "disabled", cloudConnection: "not established by this local server", privateExtra: "SYNTHETIC_PRIVATE" };
 const schema = { tool: "apple-pim", inputSchema: { additionalProperties: false, properties: { action: { enum: ["status", "schema"] } } } };
 const response = (object) => ({ content: [{ type: "text", text: "Synthetic preamble\n\n" + JSON.stringify(object) }] });
-const checkout = fileURLToPath(new URL("../", import.meta.url));
 const reviewedFixture = fileURLToPath(new URL("./fixtures/reviewed-0.2.1/", import.meta.url));
+const reviewedMailFixture = fileURLToPath(new URL("./fixtures/reviewed-0.2.1-mail-bounded/", import.meta.url));
+const reviewedGenerations = [["original", reviewedFixture], ["bounded Mail", reviewedMailFixture]];
 const pinnedArtifacts = ["scripts/plugin-launcher.mjs", "mcp-server/dist/server.js", "lib/scoped-mail-config.js"];
 
-async function reviewedFixtureBundle() {
+async function reviewedFixtureBundle(directory = reviewedFixture) {
   let file;
   try {
-    // Test-only public bytes from the reviewed baseline. Never execute this
-    // fixture or accept a newly rebuilt source bundle by updating runtime pins.
+    // Fixed public bytes from a separately reviewed generation. Never execute
+    // these fixtures or trust freshly rebuilt bytes based only on their source.
     const compressedLimit = 256 * 1024;
-    file = await open(join(reviewedFixture, "server.js.gz"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    file = await open(join(directory, "server.js.gz"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await file.stat();
     if (!info.isFile() || info.size < 1 || info.size > compressedLimit) throw new Error();
     const buffer = Buffer.alloc(compressedLimit + 1);
@@ -35,7 +36,7 @@ async function reviewedFixtureBundle() {
   finally { await file?.close(); }
 }
 
-async function reviewedPackageFixture() {
+async function reviewedPackageFixture(bundleDirectory = reviewedFixture) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "icloud-health-synthetic-")));
   try {
     const packageRoot = join(root, "package"), configDirectory = join(root, "private");
@@ -43,7 +44,7 @@ async function reviewedPackageFixture() {
     for (const path of ["plugin.json", ...pinnedArtifacts]) {
       const target = join(packageRoot, path);
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-      if (path === "mcp-server/dist/server.js") await writeFile(target, await reviewedFixtureBundle(), { mode: 0o600 });
+      if (path === "mcp-server/dist/server.js") await writeFile(target, await reviewedFixtureBundle(bundleDirectory), { mode: 0o600 });
       else await copyFile(join(reviewedFixture, path), target);
       await chmod(target, 0o600);
     }
@@ -110,41 +111,44 @@ test("a hanging initialization times out, never dispatches a tool and awaits cle
   assert.deepEqual(session.calls, ["initialize", "close"]); assert.equal(session.closed, true);
 });
 
-test("frozen reviewed package passes private metadata and all artifact hash checks", async () => {
-  const fixture = await reviewedPackageFixture();
-  try {
-    assert.deepEqual(await validateHealthPaths(fixture), {
-      packageRoot: fixture.packageRoot, configDirectory: fixture.configDirectory, packageVersion: "0.2.1",
-    });
-  } finally { await rm(fixture.root, { recursive: true, force: true }); }
-});
+for (const [name, bundleDirectory] of reviewedGenerations) {
+  test(`frozen reviewed ${name} package passes private metadata and its complete artifact tuple`, async () => {
+    const fixture = await reviewedPackageFixture(bundleDirectory);
+    try {
+      assert.deepEqual(await validateHealthPaths(fixture), {
+        packageRoot: fixture.packageRoot, configDirectory: fixture.configDirectory, packageVersion: "0.2.1",
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+}
 
-test("unreviewed rebuilt source bundle rejects before a health session is created", async () => {
-  const fixture = await reviewedPackageFixture();
+test("unknown same-version bundle rejects before a health session is created", async () => {
+  const fixture = await reviewedPackageFixture(reviewedMailFixture);
   try {
     await validateHealthPaths(fixture);
-    const sourceBundle = await readFile(join(checkout, "mcp-server/dist/server.js"));
-    assert.notDeepEqual(sourceBundle, await reviewedFixtureBundle());
-    await writeFile(join(fixture.packageRoot, "mcp-server/dist/server.js"), sourceBundle);
+    const unknownBundle = Buffer.concat([await reviewedFixtureBundle(reviewedMailFixture), Buffer.from("\n// Synthetic unreviewed package bytes.\n")]);
+    await writeFile(join(fixture.packageRoot, "mcp-server/dist/server.js"), unknownBundle);
     await rejectsBeforeLaunch(fixture);
   } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 
-test("altering each reviewed artifact rejects the otherwise valid package before a session is created", async () => {
-  const fixture = await reviewedPackageFixture();
-  try {
-    await validateHealthPaths(fixture);
-    for (const path of pinnedArtifacts) {
-      const target = join(fixture.packageRoot, path), original = await readFile(target), changed = Buffer.from(original);
-      changed[0] ^= 1;
-      try {
-        await writeFile(target, changed);
-        await rejectsBeforeLaunch(fixture);
-      } finally { await writeFile(target, original); }
+for (const [name, bundleDirectory] of reviewedGenerations) {
+  test(`altering each artifact in the reviewed ${name} package rejects before a session is created`, async () => {
+    const fixture = await reviewedPackageFixture(bundleDirectory);
+    try {
       await validateHealthPaths(fixture);
-    }
-  } finally { await rm(fixture.root, { recursive: true, force: true }); }
-});
+      for (const path of pinnedArtifacts) {
+        const target = join(fixture.packageRoot, path), original = await readFile(target), changed = Buffer.from(original);
+        changed[0] ^= 1;
+        try {
+          await writeFile(target, changed);
+          await rejectsBeforeLaunch(fixture);
+        } finally { await writeFile(target, original); }
+        await validateHealthPaths(fixture);
+      }
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+}
 
 test("private config metadata rejects world-readable files, linked files and Git placement before any package execution", async () => {
   const fixture = await reviewedPackageFixture();

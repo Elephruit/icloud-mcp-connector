@@ -16,11 +16,13 @@ node scripts/check-local-connector.mjs \
 ```
 
 Both locations must be explicit. The helper validates owner-controlled package
-paths and the reviewed 0.2.1 launcher/server/library hashes from
-[source commit 33729a5](https://github.com/Elephruit/icloud-mcp-connector/commit/33729a52a963b3ee692bf7661f221804701cf530).
-The version alone is insufficient: a same-version package with different
-reviewed launcher/server/library bytes also fails verification. Unknown versions or
-changed artifacts fail before execution and need a new source review. Config
+paths against complete reviewed 0.2.1 launcher/server/library hash tuples from
+[source commit 33729a5](https://github.com/Elephruit/icloud-mcp-connector/commit/33729a52a963b3ee692bf7661f221804701cf530)
+and [the bounded Mail change d02c04e](https://github.com/Elephruit/icloud-mcp-connector/commit/d02c04edd532f2b36e5758daac6bad69f9f7e31a).
+The version alone is insufficient: all three artifacts must match one reviewed
+generation together. Unknown versions, artifacts or hash combinations fail
+before execution and need a new source review. Accepting a reviewed generation
+does not install it or prove a live Mail read. Config
 must be an owner-owned 0700 directory outside Git and outside the package, with
 a regular, single-link, owner-owned 0600 `config.json`. The helper inspects only
 its metadata; the reviewed launcher loads the host configuration at startup.

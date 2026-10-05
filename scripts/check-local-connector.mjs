@@ -9,13 +9,21 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 export const HEALTH_TOOLS = Object.freeze(["apple-pim", "calendar", "contact", "mail", "notes", "reminder"]);
-// Reviewed 0.2.1 runtime artifacts from source commit 33729a5.
-// Unknown packages must be reviewed first, including same-version changes.
-const REVIEWED = Object.freeze({
-  "scripts/plugin-launcher.mjs": "ba0277f30e75ccfbb634a46631fa82a311f07b13a2297230ddc40061778d6abb",
-  "mcp-server/dist/server.js": "daba5100907dcd44162c513c83c383e8e7d7a80faaa5ff665dd621bb844c0bf7",
-  "lib/scoped-mail-config.js": "6b5596c782a53d3a4acb4b013412f4f718c6d3367d550bbf489ba18cc3330dde",
-});
+// Complete reviewed 0.2.1 artifact tuples from 33729a5 and d02c04e.
+// Never combine independent per-file allowlists: a package must match one
+// reviewed generation in full. Unknown same-version changes require review.
+const REVIEWED = Object.freeze([
+  Object.freeze({
+    "scripts/plugin-launcher.mjs": "ba0277f30e75ccfbb634a46631fa82a311f07b13a2297230ddc40061778d6abb",
+    "mcp-server/dist/server.js": "daba5100907dcd44162c513c83c383e8e7d7a80faaa5ff665dd621bb844c0bf7",
+    "lib/scoped-mail-config.js": "6b5596c782a53d3a4acb4b013412f4f718c6d3367d550bbf489ba18cc3330dde",
+  }),
+  Object.freeze({
+    "scripts/plugin-launcher.mjs": "ba0277f30e75ccfbb634a46631fa82a311f07b13a2297230ddc40061778d6abb",
+    "mcp-server/dist/server.js": "28bb7db962a4d1255c4841dad7cf3353ab30aba19acc51d5a1047948e70badc5",
+    "lib/scoped-mail-config.js": "6b5596c782a53d3a4acb4b013412f4f718c6d3367d550bbf489ba18cc3330dde",
+  }),
+]);
 const fail = () => new Error("Local connector health check failed; private diagnostics are withheld. No PIM data or permissions were requested.");
 const absolute = (value) => typeof value === "string" && isAbsolute(value) && !/[\u0000-\u001f\u007f]/u.test(value);
 const inside = (root, path) => { const suffix = relative(root, path); return suffix === "" || (suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix)); };
@@ -70,13 +78,14 @@ export async function validateHealthPaths({ packageRoot, configDirectory }) {
   } finally { await file.close(); }
   const manifest = JSON.parse((await boundedFile(join(root, "plugin.json"), 65536)).toString("utf8"));
   if (manifest.name !== "icloud-mcp-connector" || manifest.version !== "0.2.1") throw fail();
-  for (const [path, expected] of Object.entries(REVIEWED)) {
+  const actual = {};
+  for (const path of Object.keys(REVIEWED[0])) {
     const selected = join(root, path);
     if (await realpath(selected) !== selected) throw fail();
     await controlledDirectories(dirname(selected));
-    const actual = createHash("sha256").update(await boundedFile(selected)).digest("hex");
-    if (actual !== expected) throw fail();
+    actual[path] = createHash("sha256").update(await boundedFile(selected)).digest("hex");
   }
+  if (!REVIEWED.some((generation) => Object.entries(generation).every(([path, expected]) => actual[path] === expected))) throw fail();
   return { packageRoot: root, configDirectory: config, packageVersion: "0.2.1" };
 }
 
