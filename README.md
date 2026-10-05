@@ -130,6 +130,11 @@ total review budget and deduplicate IDs; mailbox changes can repeat or skip
 items between pages. Thread reads follow RFC References/In-Reply-To links in approved
 mailboxes and disclose incomplete coverage. They do not promise a complete
 historical conversation. Mail stays disabled until its private scope is approved.
+Source list/search pages can return completed metadata when their cooperative
+deadline expires, with explicit partial coverage and validated continuation
+positions. Native and operation failures retain fixed, redacted error codes; see
+[Mail read contracts](docs/mail-adapter.md#read-contracts-and-limits). An installed
+package needs a separately reviewed refresh and live check for these changes.
 
 Calendar ID lookup uses queries limited to allowed calendars, covering 366 days
 before and after now by default. Set `from`/`to` for get/update/delete when

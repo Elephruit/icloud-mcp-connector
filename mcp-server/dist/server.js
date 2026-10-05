@@ -18732,6 +18732,10 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
   if (argv.length !== 1) throw new Error("Invalid scoped Mail invocation");
   var p = JSON.parse(argv[0]);
   if (["list", "search", "get", "snapshot"].indexOf(p.op) < 0) throw new Error("Mail action is read-only");
+  var timedPage = p.op === "list" || p.op === "search";
+  var pageBudgetMs = p.pageBudgetMs === undefined ? 8000 : p.pageBudgetMs;
+  if (timedPage && (!Number.isInteger(pageBudgetMs) || pageBudgetMs < 1 || pageBudgetMs > 8000)) throw new Error("Mail page deadline is invalid");
+  var pageStarted = Date.now(), pageDeadlineStopped = false;
   var Mail = Application("/System/Applications/Mail.app");
   if (!Mail.running()) throw new Error("Mail must already be running");
   var parseHeaders = ${parseMailThreadHeaders.toString()};
@@ -18814,16 +18818,19 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
     var startIndex = p.op === "snapshot" ? 0 : p.offset;
     var endIndex = p.op === "snapshot" ? candidates.length : p.offset + inspectionBudget;
     for (var candidateIndex = startIndex; candidateIndex < endIndex; candidateIndex++) {
+      if (timedPage && Date.now() - pageStarted >= pageBudgetMs) { pageDeadlineStopped = true; break; }
       if (inspected >= inspectionBudget) { scanTruncated = true; break; }
       var candidate = p.op === "snapshot" ? candidates[candidateIndex] : candidates.at(candidateIndex);
       if (p.op !== "snapshot") {
         if (candidate.exists() !== true) { pageEndReached = true; break; }
-        pagePositions++;
       }
       var localId = String(candidate.id()), key = record.id + "/" + localId;
-      if (seen[key]) continue;
+      if (seen[key]) { if (timedPage) pagePositions++; continue; }
       inspected++;
       var data = metadata(record,localId,true);
+      // Advance only after a position is completely handled. Exceptions still
+      // reject the whole page; no unknown row is silently skipped or retried.
+      if (timedPage) pagePositions++;
       seen[key] = true;
       // New arrivals after the fixed request clock never reach metadata/body/header getters.
       if (data === null) continue;
@@ -18841,9 +18848,11 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
   if (p.op !== "snapshot") output = output.slice(0,p.limit);
   var coverage = {since:p.since,until:p.until,inspected:inspected,eligibleCount:eligibleCount,scanTruncated:scanTruncated,resultLimited:resultLimited,ordering:"newest among inspected candidates",historicalConversationComplete:false};
   if (p.op !== "snapshot") {
-    coverage.scanTruncated = p.offset > 0 || !pageEndReached;
+    coverage.scanTruncated = pageDeadlineStopped || p.offset > 0 || !pageEndReached;
     coverage.offset = p.offset; coverage.pageEndReached = pageEndReached;
-    coverage.nextOffset = !pageEndReached && p.offset + pagePositions < 200 ? p.offset + pagePositions : null;
+    coverage.positionsConsumed = pagePositions;
+    coverage.nextOffset = !pageEndReached && pagePositions > 0 && p.offset + pagePositions < 200 ? p.offset + pagePositions : null;
+    coverage.stopReason = pageDeadlineStopped ? "time_budget" : null;
     coverage.ordering = "received date within bounded native-index page; mailbox order is unspecified";
   }
   return JSON.stringify({success:true,messages:output,coverage:coverage});
@@ -18853,6 +18862,41 @@ var SCOPED_MAIL_JXA = String.raw`function run(argv) {
 // ../lib/scoped-mail.js
 import { userInfo } from "node:os";
 import { performance } from "node:perf_hooks";
+
+// ../lib/mail-read-error.js
+var failures = Object.freeze({
+  MAIL_PREFLIGHT_UNAVAILABLE: ["preflight", "unavailable", "Mail permission preflight executable unavailable; no Mail data command was sent"],
+  MAIL_PREFLIGHT_DENIED: ["preflight", "unavailable", "Mail must already be running with an existing Automation grant; no prompt or Mail data command was sent"],
+  MAIL_PREFLIGHT_FAILED: ["preflight", "native_failure", "Mail permission preflight failed; no Mail data command was sent"],
+  MAIL_PREFLIGHT_TIMEOUT: ["preflight", "timeout", "Mail permission preflight timed out; no Mail data command was sent"],
+  MAIL_PREFLIGHT_ABORTED: ["preflight", "aborted", "Mail permission preflight aborted; no Mail data command was sent"],
+  MAIL_PREFLIGHT_LIMIT: ["preflight", "output_limit", "Mail permission preflight output exceeded its limit; no Mail data command was sent"],
+  MAIL_PREFLIGHT_INVALID_RESPONSE: ["preflight", "invalid_response", "Mail permission preflight returned invalid JSON; no Mail data command was sent"],
+  MAIL_NATIVE_UNAVAILABLE: ["native", "unavailable", "Scoped read-only Mail executable unavailable; no complete result is available"],
+  MAIL_NATIVE_FAILED: ["native", "native_failure", "Scoped read-only Mail command failed; verify enrolled scope and supported message state locally"],
+  MAIL_NATIVE_INPUT_FAILED: ["native", "input_failure", "Scoped read-only Mail script input failed; no complete result is available"],
+  MAIL_NATIVE_TIMEOUT: ["native", "timeout", "Scoped read-only Mail command timed out; no complete result is available"],
+  MAIL_NATIVE_ABORTED: ["native", "aborted", "Scoped read-only Mail operation aborted; no complete result is available"],
+  MAIL_NATIVE_LIMIT: ["native", "output_limit", "Scoped read-only Mail output exceeded its limit; no complete result is available"],
+  MAIL_NATIVE_INVALID_RESPONSE: ["native", "invalid_response", "Scoped read-only Mail command returned invalid JSON; no complete result is available"],
+  MAIL_OPERATION_DEADLINE: ["operation", "timeout", "Mail read operation exceeded its overall deadline; no complete result is available"]
+});
+var MailReadError = class extends Error {
+  constructor(code) {
+    if (!Object.hasOwn(failures, code)) throw new TypeError("Unsupported Mail read failure code");
+    const definition = failures[code];
+    super(definition[2]);
+    this.name = "MailReadError";
+    Object.defineProperty(this, "code", { value: code, enumerable: true });
+  }
+};
+function mailReadErrorDetails(error2) {
+  if (!(error2 instanceof MailReadError)) return null;
+  const [phase, reason, message] = failures[error2.code];
+  return { error: message, code: error2.code, phase, reason };
+}
+
+// ../lib/scoped-mail.js
 var mailTool = {
   name: "mail",
   description: "Read-only scoped local iCloud Mail. Actions list/search/get/thread. Exact native account ID and host-derived mailbox path key required. No send, mark-read, delete, attachments, or discovery. Thread uses bounded RFC header relationships, never guarantees complete historical conversations.",
@@ -18865,7 +18909,7 @@ var mailTool = {
       id: { type: "string", pattern: "^[1-9][0-9]*$", description: "Local numeric message ID for get/thread; never used outside the selected mailbox." },
       query: { type: "string", minLength: 1, maxLength: 2048, description: "Search subject/sender metadata only." },
       since: { type: "string", format: "date-time", description: "UTC lower date bound; defaults to seven days ago, maximum 31 days." },
-      limit: { type: "integer", minimum: 1, maximum: 50, description: "List/search inspection budget, default 20; matches may be partial. Thread body limit with at most 200 header candidates." },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "List/search candidate cap, default 20; a cooperative page deadline may return fewer with explicit partial coverage. Thread body limit with at most 200 header candidates." },
       offset: { type: "integer", minimum: 0, maximum: 199, description: "List/search index in the scoped date-filtered collection, default 0. offset+limit must not exceed 200; native ordering and page stability are unspecified." }
     },
     required: ["action"],
@@ -18878,21 +18922,22 @@ function mailChildEnvironment() {
   if (typeof home === "string" && isAbsolute3(home)) environment.HOME = home;
   return environment;
 }
-function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, failure: failure2, signal }) {
+function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, phase = "NATIVE", signal }) {
   return new Promise((resolve, reject) => {
+    const failure2 = (reason) => new MailReadError(`MAIL_${phase}_${reason}`);
     if (signal?.aborted) {
-      reject(new Error(failure2 + "; operation aborted before launch"));
+      reject(failure2("ABORTED"));
       return;
     }
     let child;
     try {
       child = spawnImpl(command, argv, { shell: false, stdio: [input === void 0 ? "ignore" : "pipe", "pipe", "pipe"], env: mailChildEnvironment() });
     } catch {
-      reject(new Error(failure2 + "; executable unavailable"));
+      reject(failure2("UNAVAILABLE"));
       return;
     }
     let output = "", size = 0, stderrSize = 0, settled = false, killTimer;
-    const fail = (message, kill = false) => {
+    const fail = (reason, kill = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -18902,17 +18947,17 @@ function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, 
         killTimer = setTimeout(() => child.kill("SIGKILL"), 1e3);
         killTimer.unref?.();
       }
-      reject(new Error(message));
+      reject(failure2(reason));
     };
-    const abort = () => fail(failure2 + "; operation deadline aborted the process", true);
-    const timer = setTimeout(() => fail(failure2 + "; timed out", true), timeoutMs);
+    const abort = () => fail("ABORTED", true);
+    const timer = setTimeout(() => fail("TIMEOUT", true), timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       if (settled) return;
       size += Buffer.byteLength(chunk, "utf8");
       if (size > outputLimit) {
-        fail(failure2 + "; output exceeded its limit", true);
+        fail("LIMIT", true);
         return;
       }
       output += chunk;
@@ -18920,17 +18965,17 @@ function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, 
     child.stderr.on("data", (chunk) => {
       if (settled) return;
       stderrSize += Buffer.byteLength(chunk);
-      if (stderrSize > 16384) fail(failure2 + "; diagnostics exceeded their limit", true);
+      if (stderrSize > 16384) fail("LIMIT", true);
     });
-    child.on("error", () => fail(failure2 + "; executable unavailable"));
-    if (input !== void 0) child.stdin.on("error", () => fail(failure2 + "; script input failed", true));
+    child.on("error", () => fail("UNAVAILABLE"));
+    if (input !== void 0) child.stdin.on("error", () => fail("INPUT_FAILED", true));
     child.on("close", (code) => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       signal?.removeEventListener("abort", abort);
       if (settled) return;
       if (code !== 0) {
-        fail(failure2);
+        fail("FAILED");
         return;
       }
       try {
@@ -18938,14 +18983,14 @@ function processJSON(command, argv, { spawnImpl, input, timeoutMs, outputLimit, 
         settled = true;
         resolve(value);
       } catch {
-        fail(failure2 + "; invalid JSON response");
+        fail("INVALID_RESPONSE");
       }
     });
     if (input !== void 0) {
       try {
         child.stdin.end(input);
       } catch {
-        fail(failure2 + "; script input failed", true);
+        fail("INPUT_FAILED", true);
       }
     }
   });
@@ -18954,8 +18999,8 @@ async function checkMailAccess({ accessCliPath, spawnImpl = spawnProcess, platfo
   if (platform !== "darwin") throw new Error("Scoped Mail requires macOS");
   if (typeof accessCliPath !== "string" || !isAbsolute3(accessCliPath)) throw new Error("Mail permission preflight requires the fixed checkout mail-access-cli path");
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5e3) throw new Error("Mail preflight timeout is invalid");
-  const status = await processJSON(accessCliPath, ["status"], { spawnImpl, timeoutMs, signal, outputLimit: 4096, failure: "Mail permission preflight failed; no Mail command was sent" });
-  if (!status || status.success !== true || status.target !== "com.apple.mail" || status.running !== true || status.authorized !== true || status.prompted !== false || status.authorization !== "authorized") throw new Error("Mail must already be running with an existing Automation grant; no prompt or Mail data command was sent");
+  const status = await processJSON(accessCliPath, ["status"], { spawnImpl, timeoutMs, signal, outputLimit: 4096, phase: "PREFLIGHT" });
+  if (!status || status.success !== true || status.target !== "com.apple.mail" || status.running !== true || status.authorized !== true || status.prompted !== false || status.authorization !== "authorized") throw new MailReadError("MAIL_PREFLIGHT_DENIED");
   return status;
 }
 async function runScopedMailScript(payload, { accessCliPath, preflightImpl = checkMailAccess, spawnImpl = spawnProcess, platform = process.platform, timeoutMs = 2e4, signal } = {}) {
@@ -18964,8 +19009,10 @@ async function runScopedMailScript(payload, { accessCliPath, preflightImpl = che
   const started = performance.now();
   await preflightImpl({ accessCliPath, spawnImpl, platform, signal, timeoutMs: Math.min(2e3, timeoutMs) });
   const remaining = Math.floor(timeoutMs - (performance.now() - started));
-  if (remaining < 1 || signal?.aborted) throw new Error("Mail operation deadline expired after preflight; no data command was sent");
-  return processJSON("/usr/bin/osascript", ["-l", "JavaScript", "-", JSON.stringify(payload)], { spawnImpl, input: SCOPED_MAIL_JXA, timeoutMs: remaining, signal, outputLimit: 1024 * 1024, failure: "Scoped read-only Mail command failed; verify enrolled scope and supported message state locally" });
+  if (remaining < 1) throw new MailReadError("MAIL_OPERATION_DEADLINE");
+  if (signal?.aborted) throw new MailReadError("MAIL_NATIVE_ABORTED");
+  const nativePayload = ["list", "search"].includes(payload.op) ? { ...payload, pageBudgetMs: Math.min(8e3, Math.max(1, remaining - 2e3)) } : payload;
+  return processJSON("/usr/bin/osascript", ["-l", "JavaScript", "-", JSON.stringify(nativePayload)], { spawnImpl, input: SCOPED_MAIL_JXA, timeoutMs: remaining, signal, outputLimit: 1024 * 1024 });
 }
 function buildMailInvocation(args, config2, now = /* @__PURE__ */ new Date()) {
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Mail arguments must be an object");
@@ -19020,10 +19067,16 @@ function safeCoverage(coverage, invocation) {
   if (!coverage || coverage.since !== invocation.since || coverage.until !== invocation.until || !Number.isInteger(coverage.inspected) || coverage.inspected < 0 || coverage.inspected > 200 || !Number.isSafeInteger(coverage.eligibleCount) || coverage.eligibleCount < 0 || typeof coverage.scanTruncated !== "boolean" || typeof coverage.resultLimited !== "boolean" || coverage.historicalConversationComplete !== false) throw new Error("Mail coverage response is invalid");
   const output = { since: invocation.since, until: invocation.until, inspected: coverage.inspected, eligibleCount: coverage.eligibleCount, scanTruncated: coverage.scanTruncated, resultLimited: coverage.resultLimited, ordering: "newest among inspected candidates", historicalConversationComplete: false };
   if (["list", "search"].includes(invocation.op)) {
-    if (coverage.inspected > invocation.limit || coverage.eligibleCount > coverage.inspected || coverage.offset !== invocation.offset || typeof coverage.pageEndReached !== "boolean" || coverage.nextOffset !== null && (!Number.isInteger(coverage.nextOffset) || coverage.nextOffset <= invocation.offset || coverage.nextOffset > invocation.offset + invocation.limit || coverage.nextOffset >= 200) || coverage.pageEndReached && coverage.nextOffset !== null) throw new Error("Mail pagination coverage is invalid");
+    if (!Number.isInteger(coverage.positionsConsumed) || coverage.positionsConsumed < 0 || coverage.positionsConsumed > invocation.limit || coverage.inspected > coverage.positionsConsumed || coverage.eligibleCount > coverage.inspected || coverage.offset !== invocation.offset || typeof coverage.pageEndReached !== "boolean" || ![null, "time_budget"].includes(coverage.stopReason) || coverage.stopReason === "time_budget" && (coverage.pageEndReached || !coverage.scanTruncated)) throw new Error("Mail pagination coverage is invalid");
+    const nextPosition = invocation.offset + coverage.positionsConsumed;
+    const expectedNextOffset = !coverage.pageEndReached && coverage.positionsConsumed > 0 && nextPosition < 200 ? nextPosition : null;
+    if (coverage.nextOffset !== expectedNextOffset) throw new Error("Mail pagination cannot invent progress beyond completed positions");
+    if (coverage.scanTruncated !== (coverage.stopReason === "time_budget" || invocation.offset > 0 || !coverage.pageEndReached)) throw new Error("Mail pagination coverage contradicts its partial scan");
     output.offset = coverage.offset;
     output.nextOffset = coverage.nextOffset;
     output.pageEndReached = coverage.pageEndReached;
+    output.positionsConsumed = coverage.positionsConsumed;
+    output.stopReason = coverage.stopReason;
     output.ordering = "received date within bounded native-index page; mailbox order is unspecified";
   }
   return output;
@@ -19034,7 +19087,7 @@ function createScopedMailAdapter({ binDir, env = process.env, loadConfig = () =>
   return {
     async runMail(args) {
       const deadline = monotonicNow() + operationTimeoutMs;
-      const deadlineError = () => Object.assign(new Error("Mail read operation exceeded its overall deadline; no complete result is available"), { code: "MAIL_OPERATION_DEADLINE" });
+      const deadlineError = () => new MailReadError("MAIL_OPERATION_DEADLINE");
       const withinDeadline = (task) => {
         const remaining = Math.floor(deadline - monotonicNow());
         if (remaining < 1) return Promise.reject(deadlineError());
@@ -19064,6 +19117,7 @@ function createScopedMailAdapter({ binDir, env = process.env, loadConfig = () =>
       }
       const coverage = safeCoverage(result.coverage, invocation);
       if (!Array.isArray(result.messages) || result.messages.length > (args.action === "thread" ? 200 : invocation.limit)) throw new Error("Mail response exceeds its bounded result count");
+      if (args.action !== "thread" && result.messages.length > coverage.eligibleCount) throw new Error("Mail pagination returned more messages than its inspected eligible count");
       const snapshot = args.action === "thread";
       const messages = result.messages.map((message) => safeMessage(message, invocation, { snapshot, anyAllowedMailbox: snapshot }));
       if (new Set(messages.map((message) => message.mailboxId + "/" + message.id)).size !== messages.length) throw new Error("Mail returned duplicate local scoped message IDs");
@@ -19996,6 +20050,7 @@ ${JSON.stringify(markedResult, null, 2)}`
       ]
     };
   } catch (error2) {
+    const mailFailure = name === "mail" ? mailReadErrorDetails(error2) : null;
     return {
       content: [
         {
@@ -20004,6 +20059,7 @@ ${JSON.stringify(markedResult, null, 2)}`
             {
               success: false,
               error: error2.message,
+              ...mailFailure ?? {},
               ...error2 instanceof ContactsCompanionError ? {
                 code: error2.code,
                 ...error2.requestId ? { requestId: error2.requestId } : {},

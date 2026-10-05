@@ -93,8 +93,8 @@ references. `offset` starts at zero and a page must remain within the first
 200 candidates. Continue using the returned `nextOffset`; keep a separate
 total review budget and deduplicate mailbox-local IDs across pages.
 
-Coverage reports the inspected count, eligible count, next offset, page-end
-status and scan truncation. `eligibleCount` counts in-window messages among
+Coverage reports the inspected count, eligible count, consumed native positions,
+next offset, page-end status and scan truncation. `eligibleCount` counts in-window messages among
 inspected candidates, not the whole mailbox. A full page is conservatively
 marked truncated without looking beyond its budget. Mail's native index order
 is unspecified; results are sorted by received date only within the inspected
@@ -102,6 +102,40 @@ page. Concurrent arrivals or moves can repeat or skip items between pages.
 Native filtering can still be slow and the existing deadline remains enforced.
 Newly arrived or future messages outside the fixed window are skipped before
 text/header/body reads. A bounded page does not establish complete inbox history.
+
+List/search pages also have an eight-second cooperative work budget, shortened
+when less time remains before the hard subprocess deadline. Checks happen between
+candidates; an individual blocking AppleEvent cannot be interrupted by that check.
+When the budget expires, the adapter returns only completed, validated metadata,
+with `coverage.stopReason: "time_budget"`, `scanTruncated: true` and
+`pageEndReached: false`. `positionsConsumed` includes fully handled nonmatches,
+out-of-window rows and duplicate positions. `nextOffset` advances by exactly that
+count. A zero-progress stop has `nextOffset: null`; it is not proof of mailbox end.
+Continue only within an approved total read budget and deduplicate IDs. There is
+no implicit retry, skipped failing candidate or expansion to another mailbox.
+
+Hard timeouts, scope/identity failures and opaque native exceptions reject the
+request. They do not salvage unvalidated output or claim that no messages exist.
+Typed subprocess and operation failures return fixed Mail `code`, `phase` and
+`reason` fields through MCP, while native diagnostics, response fragments and
+private paths stay redacted. Earlier policy/configuration validation failures
+retain their existing error text without these extra fields:
+
+| Code | Meaning |
+| --- | --- |
+| `MAIL_PREFLIGHT_*` | Existing-grant check failed or stopped before a Mail data command |
+| `MAIL_NATIVE_TIMEOUT` | The fixed native subprocess deadline expired; no complete result |
+| `MAIL_NATIVE_FAILED` | Native command failed; its underlying cause remains unknown |
+| `MAIL_NATIVE_INVALID_RESPONSE` | Native response was not valid JSON |
+| `MAIL_NATIVE_LIMIT` | Output or diagnostics exceeded its bound |
+| `MAIL_OPERATION_DEADLINE` | The shared operation deadline expired |
+
+These classify the observed failure, without diagnosing Mail.app's underlying
+state. Other fixed native codes cover unavailable executables, aborted operations
+and script-input failures. The subprocess cap remains twenty seconds and the
+overall cap forty-five seconds, including thread stages. A new source build does
+not change an installed package or establish live reliability; a reviewed refresh
+and separately authorized bounded acceptance read are still required.
 
 `get` reads one exact mailbox-local numeric message ID within the date window.
 Plain-text content is limited to 16,384 characters; metadata is also bounded.

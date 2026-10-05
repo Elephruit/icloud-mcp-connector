@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, copyFile, link, mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { gunzipSync } from "node:zlib";
 import { checkLocalConnector, createHealthSession, HEALTH_TOOLS, parseHealthArguments, safeHealthStatus, validateHealthPaths } from "../scripts/check-local-connector.mjs";
 
 const options = { packageRoot: "/synthetic/package", configDirectory: "/synthetic/private", restart: false };
@@ -13,20 +13,26 @@ const status = { connector: "icloud-mcp-connector", transport: "stdio", contacts
 const schema = { tool: "apple-pim", inputSchema: { additionalProperties: false, properties: { action: { enum: ["status", "schema"] } } } };
 const response = (object) => ({ content: [{ type: "text", text: "Synthetic preamble\n\n" + JSON.stringify(object) }] });
 const checkout = fileURLToPath(new URL("../", import.meta.url));
+const reviewedFixture = fileURLToPath(new URL("./fixtures/reviewed-0.2.1/", import.meta.url));
 const pinnedArtifacts = ["scripts/plugin-launcher.mjs", "mcp-server/dist/server.js", "lib/scoped-mail-config.js"];
-const runGit = promisify(execFile);
 
-async function committedReviewedBundle() {
+async function reviewedFixtureBundle() {
+  let file;
   try {
-    // CI rebuilds with unlocked dependencies before these tests. Its new bundle
-    // may differ from the reviewed installed artifact, so read the tracked blob.
-    const { stdout } = await runGit("git", ["--no-pager", "show", "HEAD:mcp-server/dist/server.js"], {
-      cwd: checkout, encoding: "buffer", maxBuffer: 4 * 1024 * 1024, timeout: 5000,
-      env: { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1" },
-    });
-    if (!Buffer.isBuffer(stdout) || stdout.length < 1 || stdout.length > 4 * 1024 * 1024) throw new Error();
-    return stdout;
-  } catch { throw new Error("Reviewed package fixture requires the committed bundle in a local Git checkout."); }
+    // Test-only public bytes from the reviewed baseline. Never execute this
+    // fixture or accept a newly rebuilt source bundle by updating runtime pins.
+    const compressedLimit = 256 * 1024;
+    file = await open(join(reviewedFixture, "server.js.gz"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = await file.stat();
+    if (!info.isFile() || info.size < 1 || info.size > compressedLimit) throw new Error();
+    const buffer = Buffer.alloc(compressedLimit + 1);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    if (bytesRead < 1 || bytesRead > compressedLimit) throw new Error();
+    const bundle = gunzipSync(buffer.subarray(0, bytesRead), { maxOutputLength: 4 * 1024 * 1024 });
+    if (bundle.length < 1) throw new Error();
+    return bundle;
+  } catch { throw new Error("Reviewed package fixture is missing, invalid or exceeds its bounds."); }
+  finally { await file?.close(); }
 }
 
 async function reviewedPackageFixture() {
@@ -37,8 +43,8 @@ async function reviewedPackageFixture() {
     for (const path of ["plugin.json", ...pinnedArtifacts]) {
       const target = join(packageRoot, path);
       await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-      if (path === "mcp-server/dist/server.js") await writeFile(target, await committedReviewedBundle(), { mode: 0o600 });
-      else await copyFile(join(checkout, path), target);
+      if (path === "mcp-server/dist/server.js") await writeFile(target, await reviewedFixtureBundle(), { mode: 0o600 });
+      else await copyFile(join(reviewedFixture, path), target);
       await chmod(target, 0o600);
     }
     const configPath = join(configDirectory, "config.json");
@@ -104,12 +110,23 @@ test("a hanging initialization times out, never dispatches a tool and awaits cle
   assert.deepEqual(session.calls, ["initialize", "close"]); assert.equal(session.closed, true);
 });
 
-test("current reviewed package passes private metadata and all artifact hash checks", async () => {
+test("frozen reviewed package passes private metadata and all artifact hash checks", async () => {
   const fixture = await reviewedPackageFixture();
   try {
     assert.deepEqual(await validateHealthPaths(fixture), {
       packageRoot: fixture.packageRoot, configDirectory: fixture.configDirectory, packageVersion: "0.2.1",
     });
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("unreviewed rebuilt source bundle rejects before a health session is created", async () => {
+  const fixture = await reviewedPackageFixture();
+  try {
+    await validateHealthPaths(fixture);
+    const sourceBundle = await readFile(join(checkout, "mcp-server/dist/server.js"));
+    assert.notDeepEqual(sourceBundle, await reviewedFixtureBundle());
+    await writeFile(join(fixture.packageRoot, "mcp-server/dist/server.js"), sourceBundle);
+    await rejectsBeforeLaunch(fixture);
   } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "icloud-mcp-connector",
+  "version": "0.2.1",
+  "description": "Built on Omar Shahine's MIT-licensed apple-pim and its existing stdio MCP server. Adds scoped Calendar, Reminders, Contacts, Notes and read-only iCloud Mail tools, plus a local Codex plugin; direct cloud access for dots remains in development.",
+  "author": {
+    "name": "Elephruit",
+    "url": "https://github.com/Elephruit"
+  },
+  "homepage": "https://github.com/Elephruit/icloud-mcp-connector",
+  "repository": "https://github.com/Elephruit/icloud-mcp-connector",
+  "license": "MIT",
+  "keywords": [
+    "macos",
+    "calendar",
+    "reminders",
+    "contacts",
+    "notes",
+    "mcp",
+    "local",
+    "scoped",
+    "mail"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "iCloud MCP Connector",
+        "shortDescription": "Scoped Mac personal tools",
+        "longDescription": "Extends apple-pim's existing stdio MCP server with exact Mac resource/account scopes, disabled writes by default, Notes tools, read-only iCloud Mail and an optional native Contacts companion. Supports approved work through a connected Mac; direct cloud MCP access remains in development. Each user provides private scopes and approved macOS access.",
+        "developerName": "Elephruit",
+        "category": "Productivity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": "Help me use my approved Mac Calendar, Reminders, Contacts, Notes and read-only iCloud Mail scopes."
+      }
+    }
+  }
+}

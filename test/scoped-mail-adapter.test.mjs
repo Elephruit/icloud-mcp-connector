@@ -9,6 +9,7 @@ import { buildMailInvocation, checkMailAccess, createScopedMailAdapter, mailChil
 import { deriveMailMailboxId, loadMailConfig, validateMailConfig } from "../lib/scoped-mail-config.js";
 import { parseMailThreadHeaders } from "../lib/scoped-mail-headers.js";
 import { SCOPED_MAIL_JXA } from "../lib/scoped-mail-script.js";
+import { MailReadError, mailReadErrorDetails } from "../lib/mail-read-error.js";
 
 const now = new Date("2026-10-04T12:00:00Z");
 const accountId = "account-test";
@@ -47,14 +48,14 @@ function message(id, rfcId, options = {}) {
     dateReceived: () => new Date(options.date ?? "2026-10-03T12:00:00Z"),
     subject: () => protect(options.subject ?? "Synthetic topic"),
     sender: () => protect("Synthetic Sender <sender@example.com>"),
-    readStatus: () => protect(state.isRead),
+    readStatus: () => { const result = protect(state.isRead); options.onMetadata?.(); return result; },
     allHeaders: () => protect(options.headers ?? `Message-ID: <${rfcId}>\r\n${options.reference ? "References: <" + options.reference + ">\r\nIn-Reply-To: <" + options.reference + ">\r\n" : ""}`),
     content: () => { state.bodiesRead += 1; if (options.changeReadStatus) state.isRead = true; return protect(options.body ?? "Synthetic body " + id); },
   };
   return { native: Object.freeze(properties), state };
 }
 
-function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, icloud = true, wrongMailboxOwner, configuration = mail } = {}) {
+function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, icloud = true, wrongMailboxOwner, getMailboxOwner, pageClock, configuration = mail } = {}) {
   let activeOp; const indexedPositions = [];
   const seed = message(1, "root@example.com"), reply = message(2, "reply@example.com", { reference: "root@example.com", date: "2026-10-04T10:00:00Z" }), unrelated = message(3, "unrelated@example.com");
   const inboxRows = rows ?? [seed, unrelated];
@@ -64,7 +65,7 @@ function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, iclo
   };
   const mailbox = (name, data) => Object.freeze({
     nativeName: name,
-    account: () => wrongOwner ?? account,
+    account: () => getMailboxOwner?.(account) ?? wrongOwner ?? account,
     name: () => { if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_NAME"); return name; },
     get messages() {
       if (wrongOwner) throw new Error("UNAPPROVED_MAILBOX_MESSAGES");
@@ -85,7 +86,11 @@ function nativeFixture({ rows, inboxName = "INBOX", duplicateInbox = false, iclo
     return () => predicate.id === accountId ? [account] : [];
   };
   const nativeMail = Object.freeze({ running: () => true, accounts: accountCollection });
-  const scriptContext = { Application: (path) => { assert.equal(path, "/System/Applications/Mail.app"); return nativeMail; }, Date, Set, JSON };
+  class PageDate extends Date {
+    static now() { return pageClock(); }
+    static [Symbol.hasInstance](instance) { return instance instanceof Date; }
+  }
+  const scriptContext = { Application: (path) => { assert.equal(path, "/System/Applications/Mail.app"); return nativeMail; }, Date: pageClock ? PageDate : Date, Set, JSON };
   const calls = [];
   const runScript = async (payload) => {
     activeOp = payload.op;
@@ -235,6 +240,81 @@ test("pagination bounds and action-specific offset validation deny before native
   assert.equal(last.coverage.nextOffset, null); assert.equal(last.coverage.pageEndReached, true);
 });
 
+test("cooperative page deadline returns only completed metadata and the next consumed position", async () => {
+  let elapsed = 0;
+  const rows = Array.from({ length: 5 }, (_, index) => message(index + 1, `deadline-${index}@example.com`, { onMetadata: () => { elapsed += 5000; } }));
+  const fixture = nativeFixture({ rows, pageClock: () => elapsed });
+  const result = await fixture.runMail({ ...listArgs, limit: 5 });
+  assert.deepEqual(result.messages.map((row) => row.id), ["1", "2"]);
+  assert.deepEqual(fixture.indexedPositions, [0, 1]);
+  assert.equal(result.coverage.stopReason, "time_budget");
+  assert.equal(result.coverage.scanTruncated, true);
+  assert.equal(result.coverage.pageEndReached, false);
+  assert.equal(result.coverage.positionsConsumed, 2);
+  assert.equal(result.coverage.nextOffset, 2);
+  assert.equal(rows.slice(2).reduce((sum, row) => sum + row.state.protectedReads, 0), 0);
+  assert.equal(rows.reduce((sum, row) => sum + row.state.bodiesRead, 0), 0);
+});
+
+test("deadline search consumes nonmatching and out-of-window positions without skipping unread candidates", async () => {
+  let elapsed = 0;
+  const future = message(1, "future-budget@example.com", { date: "2026-10-04T12:00:00.001Z", denyProtectedRead: true });
+  const nonmatch = message(2, "nonmatch-budget@example.com", { onMetadata: () => { elapsed = 8000; } });
+  const remaining = message(3, "remaining-budget@example.com");
+  const fixture = nativeFixture({ rows: [future, nonmatch, remaining], pageClock: () => elapsed });
+  const result = await fixture.runMail({ ...listArgs, action: "search", query: "absent", limit: 5 });
+  assert.equal(result.messages.length, 0);
+  assert.equal(result.coverage.inspected, 2);
+  assert.equal(result.coverage.eligibleCount, 1);
+  assert.equal(result.coverage.positionsConsumed, 2);
+  assert.equal(result.coverage.nextOffset, 2);
+  assert.equal(result.coverage.stopReason, "time_budget");
+  assert.equal(future.state.protectedReads + remaining.state.protectedReads, 0);
+});
+
+test("zero-progress deadline explicitly stops without claiming end or inventing a next page", async () => {
+  let clockCalls = 0;
+  const fixture = nativeFixture({ pageClock: () => clockCalls++ === 0 ? 0 : 8000 });
+  const result = await fixture.runMail({ ...listArgs, offset: 1 });
+  assert.equal(result.messages.length, 0);
+  assert.equal(result.coverage.stopReason, "time_budget");
+  assert.equal(result.coverage.positionsConsumed, 0);
+  assert.equal(result.coverage.inspected, 0);
+  assert.equal(result.coverage.nextOffset, null);
+  assert.equal(result.coverage.pageEndReached, false);
+  assert.equal(result.coverage.scanTruncated, true);
+  assert.deepEqual(fixture.indexedPositions, []);
+});
+
+test("scope changes and opaque candidate failures reject after a prefix rather than return a partial success", async () => {
+  let changed = false;
+  const first = message(1, "before-change@example.com", { onMetadata: () => { changed = true; } });
+  const second = message(2, "after-change@example.com");
+  const fixture = nativeFixture({ rows: [first, second], pageClock: () => 0, getMailboxOwner: (allowed) => changed ? { accountType: () => "iCloud", id: () => "foreign-account" } : allowed });
+  await assert.rejects(fixture.runMail(listArgs), /owner does not match/);
+  assert.ok(first.state.protectedReads > 0);
+  assert.equal(second.state.protectedReads, 0);
+  const opaque = nativeFixture({ rows: [message(1, "completed@example.com"), message(2, "unavailable@example.com", { denyProtectedRead: true })], pageClock: () => 0 });
+  await assert.rejects(opaque.runMail(listArgs), /OUT_OF_WINDOW_PROTECTED_READ/);
+});
+
+test("pagination validation rejects forged partial stops, consumed positions and next offsets", async () => {
+  const baseline = await nativeFixture().runMail(listArgs);
+  for (const patch of [
+    { positionsConsumed: -1 }, { positionsConsumed: 21 }, { positionsConsumed: 0 },
+    { nextOffset: 3 }, { stopReason: "SYNTHETIC_PRIVATE_DIAGNOSTIC" },
+    { pageEndReached: false, scanTruncated: false, nextOffset: 2 },
+    { stopReason: "time_budget", pageEndReached: true },
+    { stopReason: "time_budget", scanTruncated: false },
+    { stopReason: "time_budget", positionsConsumed: 0, inspected: 0, eligibleCount: 0, pageEndReached: false, scanTruncated: true, nextOffset: 1 },
+  ]) {
+    const adapter = createScopedMailAdapter({ now: () => now, loadConfig: async () => mail, runScript: async () => ({ ...baseline, coverage: { ...baseline.coverage, ...patch } }) });
+    await assert.rejects(adapter.runMail(listArgs), /pagination/);
+  }
+  const laterPage = createScopedMailAdapter({ now: () => now, loadConfig: async () => mail, runScript: async () => ({ ...baseline, coverage: { ...baseline.coverage, offset: 1, pageEndReached: true, scanTruncated: false, nextOffset: null } }) });
+  await assert.rejects(laterPage.runMail({ ...listArgs, offset: 1 }), /contradicts its partial scan/);
+});
+
 test("scan skips future messages and new arrivals before protected getters; get and seed stay strict", async () => {
   for (const date of ["2026-10-05T12:00:00Z", "2026-10-04T12:00:00.001Z"]) {
     const current = message(1, "root@example.com");
@@ -362,11 +442,11 @@ test("fixed JXA runs only after permission preflight, with JSON argv/no shell an
   const promise = runScopedMailScript(payload, { platform: "darwin", preflightImpl: async () => authorized, spawnImpl: (...args) => { captured = args; return child; } });
   await Promise.resolve();
   assert.equal(captured[0], "/usr/bin/osascript"); assert.deepEqual(captured[1].slice(0, 3), ["-l", "JavaScript", "-"]);
-  assert.deepEqual(JSON.parse(captured[1][3]), payload); assert.equal(captured[2].shell, false); assert.equal(child.input, SCOPED_MAIL_JXA);
+  assert.deepEqual(JSON.parse(captured[1][3]), { ...payload, pageBudgetMs: 8000 }); assert.equal(captured[2].shell, false); assert.equal(child.input, SCOPED_MAIL_JXA);
   assert.deepEqual(Object.keys(captured[2].env).sort(), ["HOME", "LANG", "PATH"]);
   assert.equal(captured[2].env.PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
   child.stderr.emit("data", "SYNTHETIC_PRIVATE_DIAGNOSTIC"); child.emit("close", 1);
-  await assert.rejects(promise, (error) => !error.message.includes("SYNTHETIC_PRIVATE_DIAGNOSTIC"));
+  await assert.rejects(promise, (error) => error instanceof MailReadError && error.code === "MAIL_NATIVE_FAILED" && !JSON.stringify(mailReadErrorDetails(error)).includes("SYNTHETIC_PRIVATE_DIAGNOSTIC"));
   let spawned = false;
   await assert.rejects(runScopedMailScript(payload, { platform: "darwin", preflightImpl: async () => { throw new Error("not granted"); }, spawnImpl: () => { spawned = true; } }), /not granted/);
   assert.equal(spawned, false);
@@ -377,7 +457,50 @@ test("fixed JXA runs only after permission preflight, with JSON argv/no shell an
   const noisy = fakeChild();
   const diagnostics = runScopedMailScript(payload, { platform: "darwin", preflightImpl: async () => authorized, spawnImpl: () => noisy });
   await Promise.resolve(); noisy.stderr.emit("data", "x".repeat(16385));
-  await assert.rejects(diagnostics, /diagnostics exceeded/); assert.deepEqual(noisy.kills, ["SIGTERM"]); noisy.emit("close", null);
+  await assert.rejects(diagnostics, (error) => error.code === "MAIL_NATIVE_LIMIT"); assert.deepEqual(noisy.kills, ["SIGTERM"]); noisy.emit("close", null);
+});
+
+test("native timeout and abort produce typed redacted failures and terminate only the owned child", async () => {
+  const payload = buildMailInvocation(listArgs, validateMailConfig({ mail }), now);
+  const stalled = fakeChild();
+  const timeout = runScopedMailScript(payload, { platform: "darwin", timeoutMs: 20, preflightImpl: async () => authorized, spawnImpl: () => stalled });
+  await assert.rejects(timeout, (error) => error.code === "MAIL_NATIVE_TIMEOUT" && mailReadErrorDetails(error).reason === "timeout");
+  assert.deepEqual(stalled.kills, ["SIGTERM"]);
+  stalled.stdout.emit("data", JSON.stringify({ success: true, messages: [] }));
+  stalled.emit("close", 0); // Late success cannot replace the failed result.
+  const child = fakeChild(), controller = new AbortController();
+  const aborted = runScopedMailScript(payload, { platform: "darwin", preflightImpl: async () => authorized, spawnImpl: () => child, signal: controller.signal });
+  await Promise.resolve();
+  controller.abort();
+  await assert.rejects(aborted, (error) => error.code === "MAIL_NATIVE_ABORTED");
+  assert.deepEqual(child.kills, ["SIGTERM"]); child.emit("close", null);
+  let launched = false;
+  await assert.rejects(runScopedMailScript(payload, { platform: "darwin", preflightImpl: async () => authorized, spawnImpl: () => { launched = true; }, signal: controller.signal }), (error) => error.code === "MAIL_NATIVE_ABORTED");
+  assert.equal(launched, false);
+});
+
+test("invalid native JSON and preflight failures expose fixed codes without raw output", async () => {
+  const child = fakeChild();
+  const promise = runScopedMailScript(buildMailInvocation(listArgs, validateMailConfig({ mail }), now), { platform: "darwin", preflightImpl: async () => authorized, spawnImpl: () => child });
+  await Promise.resolve(); child.stdout.emit("data", "SYNTHETIC_PRIVATE_INVALID_JSON"); child.emit("close", 0);
+  await assert.rejects(promise, (error) => error.code === "MAIL_NATIVE_INVALID_RESPONSE" && !error.message.includes("SYNTHETIC_PRIVATE"));
+  const preflight = fakeChild();
+  const denied = checkMailAccess({ platform: "darwin", accessCliPath: "/synthetic/bin/mail-access-cli", spawnImpl: () => preflight });
+  preflight.stderr.emit("data", "SYNTHETIC_PRIVATE_PREFLIGHT"); preflight.emit("close", 1);
+  await assert.rejects(denied, (error) => error.code === "MAIL_PREFLIGHT_FAILED" && !error.message.includes("SYNTHETIC_PRIVATE"));
+  const expired = fakeChild();
+  const timed = checkMailAccess({ platform: "darwin", accessCliPath: "/synthetic/bin/mail-access-cli", timeoutMs: 10, spawnImpl: () => expired });
+  await assert.rejects(timed, (error) => error.code === "MAIL_PREFLIGHT_TIMEOUT");
+  assert.deepEqual(expired.kills, ["SIGTERM"]); expired.emit("close", null);
+});
+
+test("Mail error serialization ignores arbitrary codes and preserves only fixed failure facts", () => {
+  assert.equal(mailReadErrorDetails(Object.assign(new Error("synthetic"), { code: "MAIL_NATIVE_TIMEOUT" })), null);
+  for (const code of ["toString", "constructor", "SYNTHETIC_PRIVATE_CODE"]) assert.throws(() => new MailReadError(code), /Unsupported/);
+  const error = new MailReadError("MAIL_NATIVE_TIMEOUT");
+  error.message = "SYNTHETIC_PRIVATE_DIAGNOSTIC";
+  error.phase = "SYNTHETIC_PRIVATE_PHASE";
+  assert.equal(JSON.stringify(mailReadErrorDetails(error)).includes("SYNTHETIC_PRIVATE"), false);
 });
 
 test("child environment contains only fixed runtime keys and OS-derived HOME", () => {

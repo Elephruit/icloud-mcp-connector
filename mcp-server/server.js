@@ -21,6 +21,7 @@ import { createScopedDispatcher, scopedTools, scopedToolsForContactsCompanion } 
 import { ContactsCompanionError, createContactsCompanionRunner } from "../lib/contacts-companion.js";
 import { createNotesAdapter } from "../lib/notes.js";
 import { createScopedMailAdapter } from "../lib/scoped-mail.js";
+import { mailReadErrorDetails } from "../lib/mail-read-error.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +78,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
     };
   } catch (error) {
+    const mailFailure = name === "mail" ? mailReadErrorDetails(error) : null;
     return {
       content: [
         {
@@ -85,6 +87,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               success: false,
               error: error.message,
+              ...(mailFailure ?? {}),
               ...(error instanceof ContactsCompanionError ? {
                 code: error.code,
                 ...(error.requestId ? { requestId: error.requestId } : {}),
